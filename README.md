@@ -23,6 +23,28 @@ No API keys are bundled. Keys live only in your Windows user environment variabl
 
 所有文件必须放在同一个文件夹里。Keep all files in the same folder.
 
+## 国内下载方式 / Downloading from mainland China
+
+打不开 GitHub 或下载太慢时，用下面两种方式之一（都不需要注册、不需要安装 Git）：
+
+### 方式一：加速镜像下载（最简单）
+
+把下面任一链接复制到浏览器打开，即可直接下载 ZIP：
+
+- https://ghfast.top/https://github.com/neoiw0/codex-route-switcher/archive/refs/heads/main.zip
+- https://ghproxy.net/https://github.com/neoiw0/codex-route-switcher/archive/refs/heads/main.zip
+
+镜像站点偶尔会失效或限速，一个不行就换另一个，或用方式二。
+
+### 方式二：Gitee（码云）镜像仓库（国内速度快、稳定）
+
+如果作者已发布 Gitee 镜像（gitee.com/neoiw0/codex-route-switcher），朋友直接打开该地址，点「克隆/下载」->「下载 ZIP」即可。
+
+作者侧：Gitee 右上角「+」->「从 GitHub/GitLab 导入仓库」-> 粘贴 https://github.com/neoiw0/codex-route-switcher.git -> 创建；之后 GitHub 更新了，到该仓库「管理 -> 同步/强制同步」刷新镜像。
+
+> Mirror: prepend `https://ghfast.top/` or `https://ghproxy.net/` to the GitHub ZIP URL. Gitee: download the ZIP from the Gitee mirror repo if published.
+
+
 ## 使用步骤 / Usage
 
 1. 先完全退出 Codex（任务栏图标右键 -> 退出）。Fully quit Codex first.
