@@ -1,0 +1,10 @@
+# Runtime log
+switch.log
+*.log
+
+# Local runtime cache
+fox-model-catalog.json
+
+# Local Codex config and secrets - never commit
+config.toml
+.env
