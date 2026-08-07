@@ -34,10 +34,151 @@ function Write-Log {
     }
 }
 
-function Assert-CodexStopped {
-    $processes = @(Get-Process -Name 'ChatGPT', 'codex', 'Codex' -ErrorAction SilentlyContinue)
-    if ($processes.Count -gt 0) {
-        throw 'Exit Codex completely before switching. The script does not stop it for you.'
+function Stop-CodexProcesses {
+    param([int]$MaxWaitSeconds = 30)
+
+    $names = @('ChatGPT', 'Codex', 'codex-computer-use')
+    $remaining = @(Get-Process -Name $names -ErrorAction SilentlyContinue)
+    if ($remaining.Count -eq 0) {
+        Write-Log 'stop: no Codex/ChatGPT process running'
+        return $true
+    }
+    $started = Get-Date
+    $deadline = $started.AddSeconds($MaxWaitSeconds)
+    while ($true) {
+        $remaining = @(Get-Process -Name $names -ErrorAction SilentlyContinue)
+        if ($remaining.Count -eq 0) {
+            Write-Log ('stop: all processes exited after {0:N1}s' -f ((Get-Date) - $started).TotalSeconds)
+            return $true
+        }
+        if ((Get-Date) -ge $deadline) {
+            $still = ($remaining | ForEach-Object { "$($_.ProcessName)(pid=$($_.Id))" }) -join ', '
+            Write-Log "stop: TIMEOUT after $MaxWaitSeconds s - still running: $still"
+            Write-Host ''
+            Write-Host 'WARNING: some Codex processes did not exit.'
+            Write-Host 'Close them via Task Manager (or taskbar icon -> Exit), then run this switcher again.'
+            return $false
+        }
+        foreach ($proc in $remaining) {
+            try {
+                Stop-Process -Id $proc.Id -Force -ErrorAction Stop
+                Write-Log "stop: terminated $($proc.ProcessName) pid=$($proc.Id)"
+            }
+            catch {
+                Write-Log "stop: failed to terminate $($proc.ProcessName) pid=$($proc.Id): $($_.Exception.Message)"
+            }
+        }
+        Start-Sleep -Milliseconds 500
+    }
+}
+
+function Find-NewSessionFile {
+    param(
+        [string]$SessionRoot,
+        [datetime]$After
+    )
+
+    $dirs = @()
+    foreach ($day in @((Get-Date), (Get-Date).AddDays(-1))) {
+        $dir = Join-Path $SessionRoot ($day.ToString('yyyy/MM/dd'))
+        if (Test-Path -LiteralPath $dir) { $dirs += $dir }
+    }
+    foreach ($dir in $dirs) {
+        $hit = Get-ChildItem -LiteralPath $dir -Filter 'rollout-*.jsonl' -File -ErrorAction SilentlyContinue |
+            Where-Object { $_.CreationTime -gt $After } |
+            Sort-Object CreationTime -Descending |
+            Select-Object -First 1
+        if ($null -ne $hit) { return $hit }
+    }
+    return $null
+}
+
+function Test-DynamicToolsNamespace {
+    param([string]$SessionPath)
+
+    $fileStream = $null
+    for ($attempt = 1; $attempt -le 5; $attempt++) {
+        try {
+            $fileStream = [System.IO.File]::Open($SessionPath, [System.IO.FileMode]::Open, [System.IO.FileAccess]::Read, [System.IO.FileShare]::ReadWrite)
+            break
+        }
+        catch {
+            if ($attempt -eq 5) {
+                return @{ ok = $false; detail = "cannot open session file after 5 tries (locked by app?): $($_.Exception.Message)" }
+            }
+            Start-Sleep -Seconds 1
+        }
+    }
+    $reader = [System.IO.StreamReader]::new($fileStream)
+    try {
+        $firstLine = $reader.ReadLine()
+    }
+    finally {
+        $reader.Dispose()
+        $fileStream.Dispose()
+    }
+    if ([string]::IsNullOrWhiteSpace($firstLine)) {
+        return @{ ok = $false; detail = 'session first line is empty' }
+    }
+    try {
+        $first = $firstLine | ConvertFrom-Json
+    }
+    catch {
+        return @{ ok = $false; detail = "first line is not JSON: $($_.Exception.Message)" }
+    }
+    $meta = $first.session_meta
+    if ($null -eq $meta) {
+        return @{ ok = $false; detail = 'session_meta is missing (app version may not record tool metadata)' }
+    }
+    $tools = $meta.dynamic_tools
+    if ($null -eq $tools) {
+        return @{ ok = $false; detail = 'session_meta.dynamic_tools is missing (app version may not record tool metadata)' }
+    }
+    $flat = @($tools)
+    $ns = @($flat | Where-Object { $_.type -eq 'namespace' -and $_.name -eq 'codex_app' })
+    if ($ns.Count -gt 0) {
+        $toolCount = @($ns[0].tools).Count
+        return @{ ok = $true; detail = "namespace codex_app with $toolCount tools" }
+    }
+    $funcs = @($flat | Where-Object { $_.type -eq 'function' })
+    $firstName = if ($funcs.Count -gt 0) { $funcs[0].name } else { 'unknown' }
+    return @{ ok = $false; detail = "flat functions ($($funcs.Count) tools, first=$firstName) instead of namespace" }
+}
+
+function Verify-DynamicTools {
+    param([int]$WaitSeconds = 120)
+
+    $sessionRoot = Join-Path $env:USERPROFILE '.codex\sessions'
+    $restartedAt = Get-Date
+    Write-Log "verify: watching for a new session under $sessionRoot since $($restartedAt.ToString('yyyy-MM-dd HH:mm:ss'))"
+    $deadline = (Get-Date).AddSeconds($WaitSeconds)
+    $sessionFile = $null
+    while ((Get-Date) -lt $deadline) {
+        $sessionFile = Find-NewSessionFile -SessionRoot $sessionRoot -After $restartedAt
+        if ($null -ne $sessionFile) { break }
+        Start-Sleep -Seconds 2
+    }
+    if ($null -eq $sessionFile) {
+        Write-Log "verify: no new session file within $WaitSeconds s - open a NEW chat and check switch.log"
+        Write-Host ''
+        Write-Host 'No new chat session was detected in time.'
+        Write-Host 'Open a NEW chat window in Codex, then check switch.log for the verification result.'
+        return
+    }
+    Write-Log "verify: new session found: $($sessionFile.Name)"
+    $result = Test-DynamicToolsNamespace -SessionPath $sessionFile.FullName
+    if ($result.ok) {
+        Write-Log "verify: OK - $($result.detail)"
+        Write-Host ''
+        Write-Host "Verification OK: $($result.detail) - new chats should work."
+    }
+    else {
+        Write-Log "verify: WARNING - $($result.detail)"
+        Write-Host ''
+        Write-Host "WARNING: $($result.detail)"
+        Write-Host 'This usually means Codex was not fully restarted after the route switch.'
+        Write-Host 'Fully quit Codex (taskbar icon -> Exit), run this switcher again, and open a NEW chat.'
+        Write-Host 'Existing chats remain usable in the meantime.'
     }
 }
 
@@ -329,6 +470,9 @@ function Update-Route {
     if (-not (Test-Path -LiteralPath $ConfigPath)) {
         throw "Missing Codex config. Install and start Codex Desktop once first: $ConfigPath"
     }
+    $configBackup = Join-Path $CodexHomePath ('config.toml.backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+    Copy-Item -LiteralPath $ConfigPath -Destination $configBackup -Force
+    Write-Log "config backed up: $configBackup"
     $appliedEffort = Resolve-Effort -Model $Model -Requested $RequestedEffort
     $text = [System.IO.File]::ReadAllText($ConfigPath)
     $text = Set-TomlValue -Text $text -Section '' -Key 'model_provider' -Value (TomlString 'CC')
@@ -364,10 +508,9 @@ function Start-CodexDirect {
 
 try {
     Write-Log 'switch start'
-    Assert-CodexStopped
     Write-Host 'Codex Switcher (friend edition - no API keys included)'
-    Write-Host '  1) CC - Fox'
-    Write-Host '  2) CC - OpenCode Go'
+    Write-Host '  1) CC - Fox (optional)'
+    Write-Host '  2) CC - OpenCode Go (recommended / default)'
 Write-Host '  3) Test connection'
     $provider = Read-Host 'Supplier'
 
@@ -394,9 +537,13 @@ Write-Host '  3) Test connection'
     $requestedEffort = Select-FromList -Title 'Reasoning effort' -Items $Efforts
     Write-Log "supplier=$provider model=$model effort=$requestedEffort"
     Get-OrSetApiKey -EnvironmentKey $environmentKey
+    if (-not (Stop-CodexProcesses)) {
+        throw 'Codex processes did not exit in time. Close them via Task Manager and run the switcher again.'
+    }
     Update-Route -Model $model -RequestedEffort $requestedEffort -BaseUrl $baseUrl -EnvironmentKey $environmentKey
     Write-Log 'route updated'
     Start-CodexDirect
+    Verify-DynamicTools
 }
 catch {
     Write-Log "ERROR: $($_.Exception.Message)"

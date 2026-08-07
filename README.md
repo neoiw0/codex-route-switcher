@@ -9,6 +9,7 @@ A one-click tool that switches Codex Desktop's API route to third-party supplier
 - 不含任何 API Key：Key 只保存在你自己的 Windows 用户环境变量中（`FOX_API_KEY` / `OPENCODE_API_KEY`），不会写进脚本或旁边的文件。
 - 不需要本地代理，不需要看门狗。
 - OpenCode Go 大陆直连可用（Cloudflare 线路偶尔抖动，失败重试即可）。
+- 自动完全退出旧 Codex/ChatGPT 进程，切换路由后重新启动，并自动验证新会话格式，避免新聊天报 utomation_update 错误。
 - 配置永久生效：重启电脑后直接打开 Codex 即可，无需再次运行。
 
 No API keys are bundled. Keys live only in your Windows user environment variables. No local proxy or watchdog is required.
@@ -42,9 +43,9 @@ No API keys are bundled. Keys live only in your Windows user environment variabl
 
 ## 使用步骤 / Usage
 
-1. 先完全退出 Codex（任务栏图标右键 -> 退出）。Fully quit Codex first.
+1. 不用手动关：脚本会自动完全退出 Codex/ChatGPT，切换路由后再重新启动（耐心等它跑完提示）。No need to quit manually - the script fully quits Codex/ChatGPT, switches the route, and restarts it.
 2. 双击 `Codex-RouteSwitcher-Friend.bat`。Double-click the `.bat` file.
-3. 输入 `1` 选 CC - Fox，或输入 `2` 选 CC - OpenCode Go（推荐，直连）；输入 `3` 可测试连接。Enter `1` for Fox, `2` for OpenCode Go (recommended, direct), or `3` to test the connection.
+3. 输入 `1` 选 CC - Fox（可选），或输入 `2` 选 CC - OpenCode Go（推荐 / 默认）；输入 `3` 可测试连接。Enter `1` for Fox (optional), `2` for OpenCode Go (recommended / default), or `3` to test the connection.
 4. 选择模型，再选择思考强度。Pick a model and a reasoning effort.
 5. 第一次使用会提示输入你自己的 API Key（只保存到 Windows 用户环境变量）。On first run, enter your own API key (stored in Windows user environment variables only).
 6. 脚本改写 `config.toml` 并自动打开 Codex。The script rewrites the config and opens Codex.
@@ -78,6 +79,7 @@ OpenCode Go connects directly to `https://opencode.ai/zen/go/v1` - no local prox
 - **报 `reconnecting 5/5`**：旧版本遗留问题（旧版需要本地代理），新版直连不受影响。*"reconnecting 5/5"*: leftover from the old proxy-based version, not an issue in this edition.
 - **旧聊天报 `tools... missing field name`**：旧会话用的是应用内置的旧供应商，新建聊天即可。*Old chats show this error*: create a new chat instead.
 - **Codex 没有自动启动**：手动打开 Codex 即可，配置已经写好。*Codex did not auto-start*: open it manually; the config is already set.
+- **新聊天第一条消息报 `Invalid schema for function 'automation_update'`**：说明上次切换后旧进程没有完全退出。先完全退出 Codex（任务栏右键 -> 退出），再双击 bat 重新切换一次，然后开【新的】聊天窗口；或者先复用已经正常的旧聊天窗口。本版已改为自动完全退出进程，正常流程不会再遇到。*New chat shows this error*: fully quit Codex, rerun the switcher, then open a new chat (or reuse a healthy old chat).
 - **提示找不到 Codex**：启动器会自动识别 Codex、ChatGPT、GPT(beta)；仍失败就手动打开，并把窗口里列出的候选应用名发给作者。*Codex not found*: the launcher detects Codex, ChatGPT and GPT(beta) automatically; if it still fails, open Codex manually.
 
 ## 隐私说明 / Privacy
