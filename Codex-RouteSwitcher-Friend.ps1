@@ -14,6 +14,9 @@ $SwitchLogPath = Join-Path $PSScriptRoot 'switch.log'
 $OpenCodeProxyBaseUrl = 'https://opencode.ai/zen/go/v1'
 $FoxBaseUrl = 'https://dm-fox.rjj.cc/codex/v1'
 $Efforts = @('low', 'medium', 'high', 'xhigh', 'max', 'ultra')
+$DeepSeekContextWindow = 1000000
+$DefaultContextWindow = 272000
+$DeepSeekReviewModel = 'deepseek-v4-flash'
 $OpenCodeModels = @(
     'deepseek-v4-flash', 'deepseek-v4-pro', 'glm-5.1', 'glm-5.2',
     'gpt-5.6-luna', 'grok-4.5', 'hy3', 'kimi-k2.6', 'kimi-k2.7-code',
@@ -478,6 +481,11 @@ function Update-Route {
     $text = Set-TomlValue -Text $text -Section '' -Key 'model_provider' -Value (TomlString 'CC')
     $text = Set-TomlValue -Text $text -Section '' -Key 'model' -Value (TomlString $Model)
     $text = Set-TomlValue -Text $text -Section '' -Key 'model_reasoning_effort' -Value (TomlString $appliedEffort)
+    $isDeepSeek = $Model -like 'deepseek-*'
+    $contextWindow = if ($isDeepSeek) { $DeepSeekContextWindow } else { $DefaultContextWindow }
+    $text = Set-TomlValue -Text $text -Section '' -Key 'model_context_window' -Value ([string]$contextWindow)
+    $reviewModel = if ($isDeepSeek) { $DeepSeekReviewModel } else { $Model }
+    $text = Set-TomlValue -Text $text -Section '' -Key 'review_model' -Value (TomlString $reviewModel)
     $text = Set-TomlValue -Text $text -Section 'model_providers.CC' -Key 'name' -Value (TomlString 'CC')
     $text = Set-TomlValue -Text $text -Section 'model_providers.CC' -Key 'base_url' -Value (TomlString $BaseUrl)
     $text = Set-TomlValue -Text $text -Section 'model_providers.CC' -Key 'wire_api' -Value (TomlString 'responses')
@@ -486,12 +494,15 @@ function Update-Route {
     $efforts = '[ "low", "medium", "high", "xhigh", "max", "ultra" ]'
     $text = Set-TomlValue -Text $text -Section 'desktop' -Key 'enabled-reasoning-efforts' -Value $efforts
     [System.IO.File]::WriteAllText($ConfigPath, $text, [System.Text.UTF8Encoding]::new($false))
+    Write-Log "model_context_window=$contextWindow review_model=$reviewModel"
 
     Write-Host ''
     Write-Host 'Switched.'
     Write-Host "  provider label: CC"
     Write-Host "  model: $Model"
     Write-Host "  effort: $appliedEffort"
+    Write-Host "  context window: $contextWindow"
+    Write-Host "  review model: $reviewModel"
 }
 
 function Start-CodexDirect {

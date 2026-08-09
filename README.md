@@ -10,6 +10,8 @@ A one-click tool that switches Codex Desktop's API route to third-party supplier
 - 不需要本地代理，不需要看门狗。
 - OpenCode Go 大陆直连可用（Cloudflare 线路偶尔抖动，失败重试即可）。
 - 自动完全退出旧 Codex/ChatGPT 进程，切换路由后重新启动，并自动验证新会话格式，避免新聊天报 utomation_update 错误。
+- 选 DeepSeek 模型时自动设置 100 万（1M）上下文窗口，代码审核（Review）自动使用 deepseek-v4-flash。
+- DeepSeek models get a 1M context window automatically; code review uses deepseek-v4-flash.
 - 配置永久生效：重启电脑后直接打开 Codex 即可，无需再次运行。
 
 No API keys are bundled. Keys live only in your Windows user environment variables. No local proxy or watchdog is required.
