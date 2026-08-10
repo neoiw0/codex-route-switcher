@@ -609,7 +609,20 @@ public static class WinSqliteHelper {
         return @{ Updated = 0; Remaining = -1 }
     }
     try {
-        $sql = "UPDATE threads SET model_provider = '$TargetProvider', model = '$TargetModel' WHERE model_provider IS NULL OR model_provider <> '$TargetProvider' OR model IS NULL OR model <> '$TargetModel'"
+        if ([string]::IsNullOrEmpty($TargetModel)) {
+            $setClause = "model_provider = '$TargetProvider'"
+            $whereClause = "model_provider IS NULL OR model_provider <> '$TargetProvider'"
+        }
+        else {
+            if ($TargetModel -notmatch '^[A-Za-z0-9._-]+$') {
+                Write-Log "state db update aborted: invalid target model: $TargetModel"
+                Write-Host "  ERROR: invalid target model: $TargetModel"
+                return @{ Updated = 0; Remaining = -1 }
+            }
+            $setClause = "model_provider = '$TargetProvider', model = '$TargetModel'"
+            $whereClause = "model_provider IS NULL OR model_provider <> '$TargetProvider' OR model IS NULL OR model <> '$TargetModel'"
+        }
+        $sql = "UPDATE threads SET $setClause WHERE $whereClause"
         $err = [IntPtr]::Zero
         $rc = [WinSqliteHelper]::sqlite3_exec($db, $sql, [IntPtr]::Zero, [IntPtr]::Zero, [ref]$err)
         if ($rc -ne 0) {
@@ -620,7 +633,7 @@ public static class WinSqliteHelper {
         }
         $changed = [WinSqliteHelper]::sqlite3_changes($db)
 
-        $checkSql = "SELECT COUNT(*) FROM threads WHERE model_provider IS NULL OR model_provider <> '$TargetProvider' OR model IS NULL OR model <> '$TargetModel'"
+        $checkSql = "SELECT COUNT(*) FROM threads WHERE $whereClause"
         $stmt = [IntPtr]::Zero
         [void][WinSqliteHelper]::sqlite3_prepare_v2($db, $checkSql, -1, [ref]$stmt, [IntPtr]::Zero)
         $remaining = -1
@@ -641,29 +654,25 @@ public static class WinSqliteHelper {
 
 function Fix-HistoryProvider {
     param(
-        [string]$TargetProvider = 'CC',
-        [string]$TargetModel = ''
+        [string]$TargetProvider = 'CC'
     )
 
-    if ([string]::IsNullOrEmpty($TargetModel)) {
-        $TargetModel = Get-ConfigModel
-    }
-    if ([string]::IsNullOrEmpty($TargetModel)) {
-        Write-Host 'ERROR: cannot determine the target model from config.toml.'
+    if ([string]::IsNullOrEmpty($TargetProvider)) {
+        Write-Host 'ERROR: no target provider specified.'
         return
     }
-    if ($TargetModel -notmatch '^[A-Za-z0-9._-]+$') {
-        Write-Host "ERROR: invalid target model: $TargetModel"
-        return
-    }
-    Write-Host "Target: provider=$TargetProvider model=$TargetModel"
+    Write-Host "Target: provider=$TargetProvider (chat models left unchanged)"
 
-    $dbResult = Update-HistoryDatabase -TargetProvider $TargetProvider -TargetModel $TargetModel
+    $dbResult = Update-HistoryDatabase -TargetProvider $TargetProvider
+    if ($null -eq $dbResult) { return }
     if ($dbResult.Remaining -eq 0) {
-        Write-Host "  state db: all $($dbResult.Updated) chat records now use $TargetModel"
+        Write-Host "  state db: all chat records now use provider $TargetProvider"
     }
     elseif ($dbResult.Remaining -gt 0) {
         Write-Host "  state db: updated=$($dbResult.Updated) remaining=$($dbResult.Remaining) - please rerun"
+    }
+    else {
+        Write-Host '  state db: update failed (see switch.log)'
     }
 
     $sessionRoot = Join-Path $CodexHomePath 'sessions'
@@ -707,13 +716,43 @@ function Fix-HistoryProvider {
 
     Write-Host ''
     Write-Host "Done. session files: changed=$updated skipped=$skipped failed=$failed"
-    foreach ($k in $byProvider.Keys) { Write-Host "  provider $k -> CC : $($byProvider[$k])" }
+    foreach ($k in $byProvider.Keys) { Write-Host "  provider $k -> $TargetProvider : $($byProvider[$k])" }
     Write-Log "provider fix done: session files changed=$updated skipped=$skipped failed=$failed sources=$($byProvider | ConvertTo-Json -Compress)"
     if ($updated -gt 0 -or $dbResult.Updated -gt 0) {
         Write-Host ''
-        Write-Host 'Old chats are now bound to CC with the current model.'
+        Write-Host 'Old chats are now bound to CC (chat models kept as they are).'
         Write-Host 'Fully quit and reopen Codex to see them.'
     }
+}
+
+function Update-HistoryModels {
+    param(
+        [string]$TargetProvider = 'CC',
+        [string]$TargetModel
+    )
+
+    if ([string]::IsNullOrEmpty($TargetModel)) {
+        Write-Log 'history model sync skipped: no target model selected'
+        return
+    }
+    Write-Host "  Syncing all old chats to model: $TargetModel"
+    $dbResult = Update-HistoryDatabase -TargetProvider $TargetProvider -TargetModel $TargetModel
+    if ($null -eq $dbResult) { return }
+    if ($dbResult.Remaining -eq 0) {
+        if ($dbResult.Updated -gt 0) {
+            Write-Host "  Old chats: $($dbResult.Updated) record(s) synced to $TargetModel"
+        }
+        else {
+            Write-Host "  Old chats: already all using $TargetModel"
+        }
+    }
+    elseif ($dbResult.Remaining -gt 0) {
+        Write-Host "  Old chats: updated=$($dbResult.Updated) remaining=$($dbResult.Remaining) - please rerun"
+    }
+    else {
+        Write-Host '  Old chats: state db update failed (see switch.log)'
+    }
+    Write-Log "history model sync done: updated=$($dbResult.Updated) remaining=$($dbResult.Remaining) model=$TargetModel"
 }
 function Start-CodexDirect {
     if (-not (Test-Path -LiteralPath $DirectLaunchPath)) {
@@ -732,8 +771,8 @@ try {
     Write-Host 'Codex Switcher (friend edition - no API keys included)'
     Write-Host '  1) CC - Fox (optional)'
     Write-Host '  2) CC - OpenCode Go (recommended / default)'
-Write-Host '  3) Test connection'
-Write-Host '  4) Fix history provider -> CC (repair old chats)'
+    Write-Host '  3) Test connection'
+    Write-Host '  4) Fix old chat provider -> CC (name only, repair old chats)'
     $provider = Read-Host 'Supplier'
 
     switch ($provider) {
@@ -758,6 +797,7 @@ Write-Host '  4) Fix history provider -> CC (repair old chats)'
             Write-Host ''
             Write-Host 'This will fully quit Codex, then rewrite the provider of every old chat to CC.'
             Write-Host 'Old chats from Fox / other suppliers become usable again.'
+            Write-Host 'Each chat keeps its current model (use 1 or 2 to sync models).'
             if (-not (Stop-CodexProcesses)) {
                 throw 'Codex processes did not exit in time. Close them via Task Manager and run again.'
             }
@@ -777,6 +817,7 @@ Write-Host '  4) Fix history provider -> CC (repair old chats)'
     }
     Update-Route -Model $model -RequestedEffort $requestedEffort -BaseUrl $baseUrl -EnvironmentKey $environmentKey
     Write-Log 'route updated'
+    Update-HistoryModels -TargetModel $model
     Start-CodexDirect
     Verify-DynamicTools
 }
