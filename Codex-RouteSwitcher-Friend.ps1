@@ -543,8 +543,128 @@ function Update-SessionProvider {
     }
 }
 
+function Get-ConfigModel {
+    if (-not (Test-Path -LiteralPath $ConfigPath)) { return $null }
+    $text = [System.IO.File]::ReadAllText($ConfigPath)
+    $m = [regex]::Match($text, '(?m)^model\s*=\s*"([^"]+)"')
+    if (-not $m.Success) { return $null }
+    return $m.Groups[1].Value
+}
+
+function Update-HistoryDatabase {
+    param(
+        [string]$TargetProvider,
+        [string]$TargetModel
+    )
+
+    $dbPath = Join-Path $CodexHomePath 'state_5.sqlite'
+    if (-not (Test-Path -LiteralPath $dbPath)) {
+        Write-Host "  state database not found, skipping: $dbPath"
+        return @{ Updated = 0; Remaining = -1 }
+    }
+    $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+    $backup = $dbPath + '.backup-provider-cc-' + $stamp
+    Copy-Item -LiteralPath $dbPath -Destination $backup -Force
+    foreach ($suffix in @('-wal', '-shm')) {
+        $side = $dbPath + $suffix
+        if (Test-Path -LiteralPath $side) {
+            Copy-Item -LiteralPath $side -Destination ($backup + $suffix) -Force
+        }
+    }
+    Write-Log "state db backed up: $backup"
+    Write-Host "  state db backed up: $(Split-Path $backup -Leaf)"
+
+    if (-not ('WinSqliteHelper' -as [type])) {
+        Add-Type -TypeDefinition @"
+using System;
+using System.Runtime.InteropServices;
+public static class WinSqliteHelper {
+    [DllImport("winsqlite3.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern int sqlite3_open_v2(string filename, out IntPtr db, int flags, IntPtr vfs);
+    [DllImport("winsqlite3.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern int sqlite3_exec(IntPtr db, string sql, IntPtr cb, IntPtr arg, out IntPtr errmsg);
+    [DllImport("winsqlite3.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern int sqlite3_changes(IntPtr db);
+    [DllImport("winsqlite3.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern IntPtr sqlite3_errmsg(IntPtr db);
+    [DllImport("winsqlite3.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern int sqlite3_prepare_v2(IntPtr db, string sql, int nByte, out IntPtr stmt, IntPtr pzTail);
+    [DllImport("winsqlite3.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern int sqlite3_step(IntPtr stmt);
+    [DllImport("winsqlite3.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern IntPtr sqlite3_column_text(IntPtr stmt, int iCol);
+    [DllImport("winsqlite3.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern int sqlite3_finalize(IntPtr stmt);
+    [DllImport("winsqlite3.dll", CallingConvention=CallingConvention.Cdecl)]
+    public static extern int sqlite3_close(IntPtr db);
+}
+"@
+    }
+
+    $db = [IntPtr]::Zero
+    $rc = [WinSqliteHelper]::sqlite3_open_v2($dbPath, [ref]$db, 6, [IntPtr]::Zero)
+    if ($rc -ne 0) {
+        Write-Log "state db open failed rc=$rc"
+        Write-Host '  ERROR: could not open the state database'
+        return @{ Updated = 0; Remaining = -1 }
+    }
+    try {
+        $sql = "UPDATE threads SET model_provider = '$TargetProvider', model = '$TargetModel' WHERE model_provider IS NULL OR model_provider <> '$TargetProvider' OR model IS NULL OR model <> '$TargetModel'"
+        $err = [IntPtr]::Zero
+        $rc = [WinSqliteHelper]::sqlite3_exec($db, $sql, [IntPtr]::Zero, [IntPtr]::Zero, [ref]$err)
+        if ($rc -ne 0) {
+            $msg = [System.Runtime.InteropServices.Marshal]::PtrToStringAnsi([WinSqliteHelper]::sqlite3_errmsg($db))
+            Write-Log "state db update failed: $msg"
+            Write-Host "  ERROR updating state db: $msg"
+            return @{ Updated = 0; Remaining = -1 }
+        }
+        $changed = [WinSqliteHelper]::sqlite3_changes($db)
+
+        $checkSql = "SELECT COUNT(*) FROM threads WHERE model_provider IS NULL OR model_provider <> '$TargetProvider' OR model IS NULL OR model <> '$TargetModel'"
+        $stmt = [IntPtr]::Zero
+        [void][WinSqliteHelper]::sqlite3_prepare_v2($db, $checkSql, -1, [ref]$stmt, [IntPtr]::Zero)
+        $remaining = -1
+        if ([WinSqliteHelper]::sqlite3_step($stmt) -eq 100) {
+            $ptr = [WinSqliteHelper]::sqlite3_column_text($stmt, 0)
+            if ($ptr -ne [IntPtr]::Zero) { $remaining = [int][System.Runtime.InteropServices.Marshal]::PtrToStringAnsi($ptr) }
+        }
+        [void][WinSqliteHelper]::sqlite3_finalize($stmt)
+
+        [void][WinSqliteHelper]::sqlite3_exec($db, 'PRAGMA wal_checkpoint(TRUNCATE)', [IntPtr]::Zero, [IntPtr]::Zero, [ref]$err)
+        Write-Log "state db updated: rows=$changed remaining=$remaining provider=$TargetProvider model=$TargetModel"
+        return @{ Updated = $changed; Remaining = $remaining }
+    }
+    finally {
+        [void][WinSqliteHelper]::sqlite3_close($db)
+    }
+}
+
 function Fix-HistoryProvider {
-    param([string]$TargetProvider = 'CC')
+    param(
+        [string]$TargetProvider = 'CC',
+        [string]$TargetModel = ''
+    )
+
+    if ([string]::IsNullOrEmpty($TargetModel)) {
+        $TargetModel = Get-ConfigModel
+    }
+    if ([string]::IsNullOrEmpty($TargetModel)) {
+        Write-Host 'ERROR: cannot determine the target model from config.toml.'
+        return
+    }
+    if ($TargetModel -notmatch '^[A-Za-z0-9._-]+$') {
+        Write-Host "ERROR: invalid target model: $TargetModel"
+        return
+    }
+    Write-Host "Target: provider=$TargetProvider model=$TargetModel"
+
+    $dbResult = Update-HistoryDatabase -TargetProvider $TargetProvider -TargetModel $TargetModel
+    if ($dbResult.Remaining -eq 0) {
+        Write-Host "  state db: all $($dbResult.Updated) chat records now use $TargetModel"
+    }
+    elseif ($dbResult.Remaining -gt 0) {
+        Write-Host "  state db: updated=$($dbResult.Updated) remaining=$($dbResult.Remaining) - please rerun"
+    }
 
     $sessionRoot = Join-Path $CodexHomePath 'sessions'
     if (-not (Test-Path -LiteralPath $sessionRoot)) {
@@ -554,7 +674,7 @@ function Fix-HistoryProvider {
 
     $files = @(Get-ChildItem -LiteralPath $sessionRoot -Recurse -File -Filter '*.jsonl' -ErrorAction SilentlyContinue |
         Where-Object { $_.Name -like 'rollout-*.jsonl' -or $_.Name -like 'review-rollout-*.jsonl' })
-    Write-Host "Scanning $($files.Count) session files..."
+    Write-Host "Scanning $($files.Count) session files for provider..."
 
     $updated = 0
     $skipped = 0
@@ -586,12 +706,13 @@ function Fix-HistoryProvider {
     }
 
     Write-Host ''
-    Write-Host "Done. changed=$updated skipped=$skipped failed=$failed"
-    foreach ($k in $byProvider.Keys) { Write-Host "  from $k : $($byProvider[$k])" }
-    Write-Log "provider fix done: changed=$updated skipped=$skipped failed=$failed sources=$($byProvider | ConvertTo-Json -Compress)"
-    if ($updated -gt 0) {
+    Write-Host "Done. session files: changed=$updated skipped=$skipped failed=$failed"
+    foreach ($k in $byProvider.Keys) { Write-Host "  provider $k -> CC : $($byProvider[$k])" }
+    Write-Log "provider fix done: session files changed=$updated skipped=$skipped failed=$failed sources=$($byProvider | ConvertTo-Json -Compress)"
+    if ($updated -gt 0 -or $dbResult.Updated -gt 0) {
         Write-Host ''
-        Write-Host 'Old chats are now bound to CC. Fully quit and reopen Codex to see them.'
+        Write-Host 'Old chats are now bound to CC with the current model.'
+        Write-Host 'Fully quit and reopen Codex to see them.'
     }
 }
 function Start-CodexDirect {

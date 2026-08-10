@@ -81,7 +81,7 @@ OpenCode Go connects directly to `https://opencode.ai/zen/go/v1` - no local prox
 - **报 `reconnecting 5/5`**：旧版本遗留问题（旧版需要本地代理），新版直连不受影响。*"reconnecting 5/5"*: leftover from the old proxy-based version, not an issue in this edition.
 - **旧聊天报 `tools... missing field name`**：旧会话用的是应用内置的旧供应商，新建聊天即可。*Old chats show this error*: create a new chat instead.
 - **Codex 没有自动启动**：手动打开 Codex 即可，配置已经写好。*Codex did not auto-start*: open it manually; the config is already set.
-- **旧聊天记录打不开 / 消失（之前用 Fox 等供应商）**：运行切换器输入 `4`，脚本会把所有历史聊天的供应商改写成 CC（只改会话文件的 model_provider 字段），然后完全退出重开 Codex 即可。*Old chats fail to open or disappear (previously on Fox etc.)*: run the switcher and enter `4`; it rewrites every old session's provider to CC, then fully quit and reopen Codex.
+- **旧聊天记录打不开 / 消失（之前用 Fox 等供应商）或仍显示旧模型（如 luna）**：运行切换器输入 `4`，脚本会备份状态数据库，把数据库和所有旧会话的供应商改写成 CC、模型改写成当前模型（默认 DeepSeek 系列），然后完全退出重开 Codex 即可。*Old chats fail to open / disappear or still show an old model (e.g. luna)*: run the switcher and enter `4`; it backs up the state database, rewrites provider to CC and model to the current model in both the database and old session files, then fully quit and reopen Codex.
 - **新聊天第一条消息报 `Invalid schema for function 'automation_update'`**：说明上次切换后旧进程没有完全退出。先完全退出 Codex（任务栏右键 -> 退出），再双击 bat 重新切换一次，然后开【新的】聊天窗口；或者先复用已经正常的旧聊天窗口。本版已改为自动完全退出进程，正常流程不会再遇到。*New chat shows this error*: fully quit Codex, rerun the switcher, then open a new chat (or reuse a healthy old chat).
 - **提示找不到 Codex**：启动器会自动识别 Codex、ChatGPT、GPT(beta)；仍失败就手动打开，并把窗口里列出的候选应用名发给作者。*Codex not found*: the launcher detects Codex, ChatGPT and GPT(beta) automatically; if it still fails, open Codex manually.
 
