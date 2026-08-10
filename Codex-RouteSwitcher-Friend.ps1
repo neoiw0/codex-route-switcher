@@ -505,6 +505,95 @@ function Update-Route {
     Write-Host "  review model: $reviewModel"
 }
 
+
+function Update-SessionProvider {
+    param(
+        [string]$Path,
+        [string]$TargetProvider
+    )
+
+    $fs = [System.IO.File]::Open($Path, [System.IO.FileMode]::Open, [System.IO.FileAccess]::ReadWrite, [System.IO.FileShare]::ReadWrite)
+    try {
+        $reader = New-Object System.IO.StreamReader($fs, [System.Text.Encoding]::UTF8, $true, 1024, $true)
+        $firstLine = $reader.ReadLine()
+        $rest = $reader.ReadToEnd()
+        $reader.Dispose()
+
+        $m = [regex]::Match($firstLine, '"model_provider"\s*:\s*"([^"]*)"')
+        if (-not $m.Success) { return @{ Changed = $false; OldProvider = $null } }
+        $old = $m.Groups[1].Value
+        if ($old -eq $TargetProvider) { return @{ Changed = $false; OldProvider = $old } }
+
+        $newFirst = [regex]::Replace($firstLine, '"model_provider"\s*:\s*"[^"]*"', ('"model_provider": "' + $TargetProvider + '"'), 1)
+
+        $fs.SetLength(0)
+        $fs.Position = 0
+        $writer = New-Object System.IO.StreamWriter($fs, (New-Object System.Text.UTF8Encoding($false)), 1024, $true)
+        $writer.Write($newFirst)
+        $writer.Write([string][char]10)
+        $writer.Write($rest)
+        $writer.Flush()
+        $writer.Dispose()
+
+        Write-Log "provider fix: $Path : $old -> $TargetProvider"
+        return @{ Changed = $true; OldProvider = $old }
+    }
+    finally {
+        $fs.Dispose()
+    }
+}
+
+function Fix-HistoryProvider {
+    param([string]$TargetProvider = 'CC')
+
+    $sessionRoot = Join-Path $CodexHomePath 'sessions'
+    if (-not (Test-Path -LiteralPath $sessionRoot)) {
+        Write-Host "No sessions folder found: $sessionRoot"
+        return
+    }
+
+    $files = @(Get-ChildItem -LiteralPath $sessionRoot -Recurse -File -Filter '*.jsonl' -ErrorAction SilentlyContinue |
+        Where-Object { $_.Name -like 'rollout-*.jsonl' -or $_.Name -like 'review-rollout-*.jsonl' })
+    Write-Host "Scanning $($files.Count) session files..."
+
+    $updated = 0
+    $skipped = 0
+    $failed = 0
+    $byProvider = @{}
+    foreach ($file in $files) {
+        $result = $null
+        for ($attempt = 1; $attempt -le 5; $attempt++) {
+            try {
+                $result = Update-SessionProvider -Path $file.FullName -TargetProvider $TargetProvider
+                break
+            }
+            catch {
+                if ($attempt -eq 5) {
+                    $failed++
+                    Write-Log "provider fix FAILED: $($file.FullName) - $($_.Exception.Message)"
+                    Write-Host "  FAILED: $($file.Name)"
+                }
+                else { Start-Sleep -Milliseconds 300 }
+            }
+        }
+        if ($null -eq $result) { continue }
+        if ($result.Changed) {
+            $updated++
+            if (-not $byProvider.ContainsKey($result.OldProvider)) { $byProvider[$result.OldProvider] = 0 }
+            $byProvider[$result.OldProvider]++
+        }
+        else { $skipped++ }
+    }
+
+    Write-Host ''
+    Write-Host "Done. changed=$updated skipped=$skipped failed=$failed"
+    foreach ($k in $byProvider.Keys) { Write-Host "  from $k : $($byProvider[$k])" }
+    Write-Log "provider fix done: changed=$updated skipped=$skipped failed=$failed sources=$($byProvider | ConvertTo-Json -Compress)"
+    if ($updated -gt 0) {
+        Write-Host ''
+        Write-Host 'Old chats are now bound to CC. Fully quit and reopen Codex to see them.'
+    }
+}
 function Start-CodexDirect {
     if (-not (Test-Path -LiteralPath $DirectLaunchPath)) {
         throw "Missing direct launcher: $DirectLaunchPath"
@@ -523,6 +612,7 @@ try {
     Write-Host '  1) CC - Fox (optional)'
     Write-Host '  2) CC - OpenCode Go (recommended / default)'
 Write-Host '  3) Test connection'
+Write-Host '  4) Fix history provider -> CC (repair old chats)'
     $provider = Read-Host 'Supplier'
 
     switch ($provider) {
@@ -541,6 +631,19 @@ Write-Host '  3) Test connection'
             $model = Select-FromList -Title 'OpenCode Go models' -Items $OpenCodeModels
             $baseUrl = $OpenCodeProxyBaseUrl
             $environmentKey = 'OPENCODE_API_KEY'
+        }
+
+        '4' {
+            Write-Host ''
+            Write-Host 'This will fully quit Codex, then rewrite the provider of every old chat to CC.'
+            Write-Host 'Old chats from Fox / other suppliers become usable again.'
+            if (-not (Stop-CodexProcesses)) {
+                throw 'Codex processes did not exit in time. Close them via Task Manager and run again.'
+            }
+            Fix-HistoryProvider -TargetProvider 'CC'
+            Write-Host ''
+            Read-Host 'Press Enter to close'
+            exit 0
         }
         default { throw 'Invalid supplier.' }
     }
