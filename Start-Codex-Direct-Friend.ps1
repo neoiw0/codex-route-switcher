@@ -7,7 +7,7 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = 'Stop'
 
-$BypassList = 'dm-fox.rjj.cc;*.rjj.cc;opencode.ai;*.opencode.ai;127.0.0.1;localhost;<local>'
+$BypassList = 'dm-fox.rjj.cc;*.rjj.cc;opencode.ai;*.opencode.ai;api.deepseek.com;*.deepseek.com;127.0.0.1;localhost;<local>'
 $SwitchLogPath = Join-Path $PSScriptRoot 'switch.log'
 
 function Write-Log {
