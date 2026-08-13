@@ -642,9 +642,15 @@ function Update-CatalogSearchFlags {
         $changed = 0
         foreach ($model in @($catalog.models)) {
             $target = $SearchTolerantModels -contains $model.slug
-            $current = $model.supports_search_tool
+            $prop = $model.PSObject.Properties['supports_search_tool']
+            $current = if ($null -ne $prop) { $prop.Value } else { $null }
             if ($current -ne $target) {
-                $model.supports_search_tool = $target
+                if ($null -ne $prop) {
+                    $model.supports_search_tool = $target
+                }
+                else {
+                    $model | Add-Member -NotePropertyName 'supports_search_tool' -NotePropertyValue $target -Force
+                }
                 $changed++
             }
         }
