@@ -25,6 +25,7 @@ TARGET = "https://opencode.ai/zen/go"
 LOG = os.path.join(os.environ.get("TEMP", "."), "codex-opencode-pro-bridge.log")
 BODYCAPTURE = os.environ.get("CODEX_BODY_CAPTURE", "")  # 诊断用：落盘请求正文（默认关）
 SSEDUMP = os.environ.get("CODEX_SSE_DUMP", "")  # 诊断用：落盘转发的 SSE 流（默认关）
+KEEP_TOOLS = os.environ.get("CODEX_KEEP_TOOLS", "") == "1"  # 诊断/CLI 用：保留工具
 LOCK = threading.Lock()
 
 
@@ -172,6 +173,7 @@ class Handler(BaseHTTPRequestHandler):
         self.wfile.write(MODELS_BODY)
 
     def do_GET(self):
+        log_rec({"method": "GET", "path": self.path, "upgrade": self.headers.get("Upgrade")})
         if self.path.startswith("/v1/models"):
             self._models()
             return
@@ -186,11 +188,20 @@ class Handler(BaseHTTPRequestHandler):
             parsed = json.loads(body.decode("utf-8"))
             if isinstance(parsed, dict) and isinstance(parsed.get("input"), list):
                 parsed["input"] = convert_input(parsed["input"])
+                if not KEEP_TOOLS and parsed.get("tools"):
+                    # OpenCode Pro 在桌面版里一旦模型调用工具，应用会在工具轮后
+                    # 卡死（应用内部行为，无法修复）。默认去掉工具，让 Pro 以
+                    # 纯对话模式稳定运行；flash / DeepSeek 官方不受影响。
+                    tool_count = len(parsed["tools"])
+                    parsed.pop("tools", None)
+                    parsed.pop("tool_choice", None)
+                    parsed.pop("parallel_tool_calls", None)
+                    log_rec({"tools_stripped": tool_count})
                 forwarded = json.dumps(parsed, ensure_ascii=False).encode("utf-8")
         except Exception as exc:
             log_rec({"parse_error": str(exc)})
 
-        rec = {"path": self.path}
+        rec = {"method": "POST", "path": self.path}
         if isinstance(parsed, dict):
             rec["model"] = parsed.get("model")
             rec["input_count"] = len(parsed.get("input", []))
@@ -236,7 +247,7 @@ class Handler(BaseHTTPRequestHandler):
 
     def _relay_stream(self, resp):
         buf = b""
-        self._state = {"items": {}, "text_item": None, "next_index": 0, "seq": 0, "response": None}
+        self._state = {"items": {}, "text_item": None, "next_index": 0, "seq": 0, "seq_base": -1, "response": None}
         while True:
             chunk = resp.read(65536)
             if not chunk:
@@ -252,7 +263,8 @@ class Handler(BaseHTTPRequestHandler):
     def _emit(self, event, data_obj):
         data_obj = dict(data_obj)
         data_obj.setdefault("type", event)  # Codex 要求每条 SSE data 带顶层 type
-        data_obj.setdefault("sequence_number", self._state["seq"])
+        # 合成事件的序号接在上游最大序号之后，避免与上游事件混流时序号回退
+        data_obj.setdefault("sequence_number", self._state["seq_base"] + self._state["seq"] + 1)
         self._state["seq"] += 1
         line = "event: %s\ndata: %s\n\n" % (event, json.dumps(data_obj, ensure_ascii=False))
         self.wfile.write(line.encode("utf-8"))
@@ -278,6 +290,12 @@ class Handler(BaseHTTPRequestHandler):
                 data_lines.append(ln[5:].strip())
         data_str = "\n".join(data_lines)
         state = self._state
+        try:
+            seq = json.loads(data_str).get("sequence_number")
+            if isinstance(seq, int) and seq >= 0:
+                state["seq_base"] = max(state["seq_base"], seq)
+        except Exception:
+            pass
         if event == "response.output_text.delta":
             try:
                 d = json.loads(data_str)
