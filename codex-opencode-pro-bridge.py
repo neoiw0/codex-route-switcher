@@ -13,6 +13,7 @@
 
 import json
 import os
+import re
 import sys
 import threading
 import time
@@ -22,6 +23,8 @@ from urllib.request import Request, urlopen
 
 TARGET = "https://opencode.ai/zen/go"
 LOG = os.path.join(os.environ.get("TEMP", "."), "codex-opencode-pro-bridge.log")
+BODYCAPTURE = os.environ.get("CODEX_BODY_CAPTURE", "")  # 诊断用：落盘请求正文（默认关）
+SSEDUMP = os.environ.get("CODEX_SSE_DUMP", "")  # 诊断用：落盘转发的 SSE 流（默认关）
 LOCK = threading.Lock()
 
 
@@ -30,6 +33,15 @@ def log_rec(rec):
         with LOCK:
             with open(LOG, "ab") as f:
                 f.write(json.dumps(rec, ensure_ascii=False).encode("utf-8") + b"\n")
+    except Exception:
+        pass
+
+
+def capture_bytes(path, data):
+    try:
+        with LOCK:
+            with open(path, "ab") as f:
+                f.write(data)
     except Exception:
         pass
 
@@ -51,15 +63,34 @@ def text_of(content):
 
 def convert_input(items):
     # Responses 输入 -> chat 风格（补 id；连续 function_call 合并为一条
-    # assistant.tool_calls；配对修正：去掉没有对应 tool 消息的 tool_calls）。
+    # assistant.tool_calls；配对修正：去掉没有对应 tool 消息的 tool_calls；
+    # reasoning 项合并进下一条 assistant 消息的 reasoning_content 传回；
+    # 工具结果（role:"tool"）转成 role:"user"（网关不认 tool 角色）。
     out = []
+    pending_reasoning = []
+
+    def attach_reasoning(msg):
+        if pending_reasoning:
+            msg["reasoning_content"] = "\n".join(pending_reasoning)
+            del pending_reasoning[:]
+        return msg
+
     for it in items or []:
         t = it.get("type")
         if t is None:
             out.append(it)  # 已经是 chat 风格，原样保留
             continue
+        if t == "reasoning":
+            for c in it.get("content") or []:
+                if isinstance(c, dict) and c.get("text"):
+                    pending_reasoning.append(c["text"])
+            continue
         if t == "message":
-            out.append({"role": it.get("role", "user"), "content": text_of(it.get("content"))})
+            role = it.get("role", "user")
+            msg = {"role": role, "content": text_of(it.get("content"))}
+            if role == "assistant":
+                attach_reasoning(msg)
+            out.append(msg)
         elif t == "function_call":
             call_id = it.get("id") or it.get("call_id") or ("call_%d" % len(out))
             tc = {
@@ -67,12 +98,13 @@ def convert_input(items):
                 "type": "function",
                 "function": {"name": it.get("name", ""), "arguments": it.get("arguments", "{}")},
             }
-            if out and out[-1].get("role") == "assistant" and out[-1].get("tool_calls") is not None and out[-1].get("content") is None:
+            if out and out[-1].get("role") == "assistant" and out[-1].get("tool_calls") is not None and out[-1].get("content") == "":
                 out[-1]["tool_calls"].append(tc)
             else:
-                out.append({"role": "assistant", "content": None, "tool_calls": [tc]})
+                out.append(attach_reasoning({"role": "assistant", "content": "", "tool_calls": [tc]}))
         elif t == "function_call_output":
-            out.append({"role": "tool", "tool_call_id": it.get("call_id", ""), "content": text_of(it.get("output"))})
+            call_id = it.get("call_id", "")
+            out.append({"role": "user", "content": "[Tool output for %s]\n%s" % (call_id, text_of(it.get("output")))})
         elif t == "custom_tool_call":
             call_id = it.get("id") or it.get("call_id") or ("call_%d" % len(out))
             tc = {
@@ -80,13 +112,18 @@ def convert_input(items):
                 "type": "function",
                 "function": {"name": it.get("name", "apply_patch"), "arguments": json.dumps({"input": it.get("input", "")})},
             }
-            if out and out[-1].get("role") == "assistant" and out[-1].get("tool_calls") is not None and out[-1].get("content") is None:
+            if out and out[-1].get("role") == "assistant" and out[-1].get("tool_calls") is not None and out[-1].get("content") == "":
                 out[-1]["tool_calls"].append(tc)
             else:
-                out.append({"role": "assistant", "content": None, "tool_calls": [tc]})
+                out.append(attach_reasoning({"role": "assistant", "content": "", "tool_calls": [tc]}))
         elif t == "custom_tool_call_output":
-            out.append({"role": "tool", "tool_call_id": it.get("call_id", ""), "content": text_of(it.get("output"))})
-        # reasoning / web_search_call 等不进入 chat 载荷
+            call_id = it.get("call_id", "")
+            out.append({"role": "user", "content": "[Tool output for %s]\n%s" % (call_id, text_of(it.get("output")))})
+        # web_search_call 等不进入 chat 载荷
+
+    if pending_reasoning:
+        # 最后仍有未附着的 reasoning（极端情况），丢弃，避免生成孤立消息
+        del pending_reasoning[:]
 
     fixed = []
     pending_ids = set()
@@ -94,11 +131,15 @@ def convert_input(items):
         if msg.get("role") == "assistant" and msg.get("tool_calls"):
             pending_ids = {tc["id"] for tc in msg["tool_calls"]}
             fixed.append(msg)
-        elif msg.get("role") == "tool":
-            if msg.get("tool_call_id") in pending_ids:
-                fixed.append(msg)
-                pending_ids.discard(msg.get("tool_call_id"))
+        elif msg.get("role") == "user" and msg.get("content", "").startswith("[Tool output for "):
+            # 工具结果已转为 user 消息，直接保留（不再参与配对）
+            fixed.append(msg)
+            m = re.match(r"\[Tool output for ([^\]]+)\]", msg.get("content", ""))
+            if m:
+                pending_ids.discard(m.group(1))
         else:
+            # 真实 user/assistant 消息到来时，若上一轮 tool_calls 还没结果，
+            # 视为孤儿调用，从最后的 assistant 消息里移除
             if pending_ids:
                 for prev in reversed(fixed):
                     if prev.get("role") == "assistant" and prev.get("tool_calls"):
@@ -160,7 +201,11 @@ class Handler(BaseHTTPRequestHandler):
             if k.lower() not in ("host", "content-length", "accept-encoding"):
                 req.add_header(k, v)
         try:
+            if BODYCAPTURE:
+                capture_bytes(BODYCAPTURE, b"==== REQUEST ====\n" + forwarded + b"\n\n")
             resp = urlopen(req, timeout=600)
+            if BODYCAPTURE:
+                capture_bytes(BODYCAPTURE, b"==== UPSTREAM STATUS " + str(resp.status).encode() + b" ====\n")
             self.send_response(resp.status)
             for k, v in resp.headers.items():
                 if k.lower() not in ("transfer-encoding", "connection", "content-length"):
@@ -170,6 +215,8 @@ class Handler(BaseHTTPRequestHandler):
         except HTTPError as exc:
             err_body = exc.read().decode("utf-8", errors="replace")
             log_rec({"upstream_error": exc.code, "body": err_body[:500]})
+            if BODYCAPTURE:
+                capture_bytes(BODYCAPTURE, ("==== UPSTREAM ERROR %d ====\n%s\n\n" % (exc.code, err_body)).encode("utf-8"))
             try:
                 self.send_response(exc.code)
                 self.send_header("Content-Type", "application/json")
@@ -210,10 +257,15 @@ class Handler(BaseHTTPRequestHandler):
         line = "event: %s\ndata: %s\n\n" % (event, json.dumps(data_obj, ensure_ascii=False))
         self.wfile.write(line.encode("utf-8"))
         self.wfile.flush()
+        if SSEDUMP:
+            capture_bytes(SSEDUMP, line.encode("utf-8"))
 
     def _write_raw(self, block):
-        self.wfile.write(block + b"\n\n")
+        data = block + b"\n\n"
+        self.wfile.write(data)
         self.wfile.flush()
+        if SSEDUMP:
+            capture_bytes(SSEDUMP, data)
 
     def _process_block(self, block):
         lines = block.decode("utf-8", errors="replace").split("\n")
@@ -234,7 +286,7 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if state["response"] is None:
                 self._emit_created(d)
-            item_id = d.get("id") or (d.get("response") or {}).get("id") or "item_%d" % state["next_index"]
+            item_id = d.get("item_id") or d.get("id") or (d.get("response") or {}).get("id") or "item_%d" % state["next_index"]
             delta = d.get("delta", "")
             ti = state["text_item"]
             if ti is None or ti["id"] != item_id:
@@ -272,14 +324,18 @@ class Handler(BaseHTTPRequestHandler):
                 {"item_id": item_id, "output_index": ti["output_index"], "content_index": 0, "delta": delta, "logprobs": []},
             )
         elif event == "response.output_item.added":
-            self._flush_text_item()
             try:
                 d = json.loads(data_str)
-                idx = d.get("output_index", state["next_index"])
-                state["next_index"] = max(state["next_index"], idx + 1)
                 it = d.get("item", {})
                 if it.get("type") == "function_call":
+                    idx = d.get("output_index", state["next_index"])
+                    state["next_index"] = max(state["next_index"], idx + 1)
                     state["items"][idx] = {"item": it, "args": ""}
+                elif it.get("type") == "message":
+                    # 上游把长回复拆成很多个独立 message item 逐块发送，
+                    # 原样透传会让 Codex 桌面版界面卡死；这里吞掉，
+                    # 由下面合成的单条 message 生命周期替代。
+                    return
             except Exception:
                 pass
             self._write_raw(block)
@@ -292,6 +348,22 @@ class Handler(BaseHTTPRequestHandler):
             except Exception:
                 pass
             self._write_raw(block)
+        elif event in ("response.output_item.done", "response.content_part.added",
+                       "response.content_part.done", "response.output_text.done"):
+            # message/function_call 的 done 由合成/冲刷逻辑统一发出；
+            # content_part/output_text 的结束事件应用侧不处理，一并吞掉。
+            # reasoning 的 output_item.done 仍会原样透传。
+            if event == "response.output_item.done":
+                try:
+                    d = json.loads(data_str)
+                    it = d.get("item", {})
+                    if it.get("type") in ("message", "function_call"):
+                        return
+                except Exception:
+                    pass
+                self._write_raw(block)
+            else:
+                return
         elif event == "response.completed":
             self._flush_text_item()
             self._flush_function_calls()
