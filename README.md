@@ -11,13 +11,14 @@ A one-click tool that switches Codex Desktop's API route to third-party supplier
 ## 特点 / Features
 
 - 不含任何 API Key：Key 只保存在你自己的 Windows 用户环境变量中（`OPENCODE_API_KEY` / `DEEPSEEK_API_KEY` / `FOX_API_KEY`），不会写进脚本或旁边的文件。
-- 不需要本地代理，不需要看门狗。OpenCode / DeepSeek 官方 / Fox 均大陆直连（Cloudflare 线路偶尔抖动，失败重试即可）。
+- 不需要科学上网、不需要看门狗。OpenCode / DeepSeek 官方 / Fox 均大陆直连（Cloudflare 线路偶尔抖动，失败重试即可）；OpenCode 的 Pro 由内置本地小桥自动转换格式（只监听本机 `127.0.0.1`，无需手动操作）。
 - 自动完全退出旧 Codex/ChatGPT 进程，切换路由后重新启动，并自动验证新会话格式，避免新聊天报 automation_update 错误。
 - 选 DeepSeek 系列模型时自动设置 100 万（1M）上下文窗口，代码审核（Review）自动使用 `deepseek-v4-flash`。DeepSeek models get a 1M context window automatically; code review uses `deepseek-v4-flash`.
 - 思考强度不用手动选：切换器按模型自动设置可用档位，打开 Codex 后可在聊天窗口里调节（只显示该模型支持的档位）。No manual reasoning-effort question; the app offers only the levels each model supports.
 - 每次切换都会自动把所有旧聊天同步成你选的模型（先备份状态数据库），旧聊天不再停留在旧模型。Every switch automatically syncs all old chats to the model you pick (state database is backed up first).
 - DeepSeek 官方选项会自动写入官方 Codex 模型目录（`~/.codex/route-switcher-deepseek-catalog.json`），确保 apply_patch 工具、1M 上下文和思考档位都正常；切回 OpenCode/Fox 时自动恢复你原来的模型目录设置。The DeepSeek option writes the official Codex model catalog automatically and restores your previous catalog setting when you switch back.
 - OpenCode 网关只兼容 flash 的搜索工具（web_search / tool_search），其它模型带着搜索工具会被网关拒绝。切换器会自动给这些模型关闭搜索工具（`web_search = "disabled"` + 目录 `supports_search_tool=false`）。The switcher auto-disables the search tools for models whose gateway route rejects them.
+- OpenCode 的 `deepseek-v4-pro` 网关要求更严格的聊天格式（每条消息带 id 等），Codex 原生格式会被拒绝。选 Pro 时切换器会自动启动一个内置本地小桥（`codex-opencode-pro-bridge.py`，只监听 `127.0.0.1:9877`），把请求转换成网关能接受的格式并补齐返回流，切回其它模型时自动关闭。桥的日志只记录模型名/条数/错误，不记录对话内容。*OpenCode Pro works through a built-in local bridge (127.0.0.1:9877) that converts the message format automatically; it starts when you pick Pro and stops when you switch away. Its log never records conversation content.*
 - 配置永久生效：重启电脑后直接打开 Codex 即可，无需再次运行。The config is permanent and survives reboots.
 
 No API keys are bundled. Keys live only in your Windows user environment variables. No local proxy or watchdog is required.
@@ -29,6 +30,7 @@ No API keys are bundled. Keys live only in your Windows user environment variabl
 | `Codex-RouteSwitcher-Friend.bat` | 双击运行这个 / double-click this one |
 | `Codex-RouteSwitcher-Friend.ps1` | 切换逻辑，不要删 / switching logic, do not delete |
 | `Start-Codex-Direct-Friend.ps1` | Codex 启动器，不要删 / Codex launcher, do not delete |
+| `codex-opencode-pro-bridge.py` | OpenCode Pro 本地桥（选 Pro 时自动运行），不要删 / local bridge for OpenCode Pro (auto-run), do not delete |
 
 所有文件必须放在同一个文件夹里。Keep all files in the same folder.
 
@@ -59,7 +61,7 @@ No API keys are bundled. Keys live only in your Windows user environment variabl
 
 ## 直连说明 / Direct connection
 
-- OpenCode Go 直接连接 `https://opencode.ai/zen/go/v1`：不需要本地代理，不需要科学上网。
+- OpenCode Go 直接连接 `https://opencode.ai/zen/go/v1`：不需要科学上网。选 `deepseek-v4-pro` 时自动走内置本地桥（`codex-opencode-pro-bridge.py`，监听 `127.0.0.1:9877`），请求会在本机被转换成 OpenCode 网关要求的格式，再转发到 `https://opencode.ai/zen/go`；切回其它模型时桥自动关闭。
 - DeepSeek 官方 API 直接连接 `https://api.deepseek.com`（Responses 格式，官方为 Codex 提供）。
 - Fox 直连 `https://dm-fox.rjj.cc/codex/v1`。
 - 配置是永久的：重启电脑、重开应用都有效。
@@ -101,9 +103,10 @@ Models: `deepseek-v4-flash` and `deepseek-v4-pro-0813` (the official stable buil
 - **旧聊天记录打不开 / 消失（之前用 Fox 等供应商）**：运行切换器输入 `5`，脚本会备份状态数据库，把数据库和所有旧会话的供应商改写成 CC（只改名字，聊天模型不变），然后完全退出重开 Codex 即可。*Old chats fail to open / disappear*: run the switcher and enter `5`; it backs up the state database and rewrites only the provider to CC (chat models are kept), then fully quit and reopen Codex.
 - **旧聊天仍显示旧模型（如 luna）**：正常切换一次即可——每次切换时脚本都会自动把所有旧聊天同步成你选的模型，不用单独操作。*Old chats still show a stale model (e.g. luna)*: just run a normal switch; every switch automatically syncs all old chats to the model you picked.
 - **新聊天第一条消息报 `Invalid schema for function 'automation_update'`**：说明上次切换后旧进程没有完全退出。先完全退出 Codex（任务栏右键 -> 退出），再双击 bat 重新切换一次，然后开【新的】聊天窗口；或者先复用已经正常的旧聊天窗口。本版已改为自动完全退出进程，正常流程不会再遇到。*New chat shows this error*: fully quit Codex, rerun the switcher, then open a new chat (or reuse a healthy old chat).
-- **OpenCode 模型列表为什么只有 flash / hy3 / kimi-k2.5 / kimi-k2.6 四个？Pro 怎么用？**：用真实的多轮会话载荷逐个实测，OpenCode 网关只有这四个模型能正常对话；deepseek-v4-pro、GLM 系列、gpt-5.6-luna、kimi-k2.7+、mimo、minimax 都会因网关对消息格式要求过严（`messages[...]: missing field id`、`role tool` 等）而报错，这是 OpenCode 网关的格式限制，切换器无法绕过。**要 Pro 请选菜单 2（DeepSeek 官方 API）**，官方接口专为 Codex 提供，`deepseek-v4-pro-0813` 稳定可用。*Why only 4 OpenCode models?* The gateway's strict message parsing only works with flash/hy3/kimi-k2.5/kimi-k2.6 in real sessions; use option 2 (DeepSeek official API) for Pro.
+- **OpenCode 模型列表里为什么有 Pro 了？**：`deepseek-v4-pro` 经内置本地桥自动转换消息格式后已可在 OpenCode 上稳定使用（实测多轮会话、工具调用均通过）；选 Pro 时脚本会自动启动桥并把路由指向本地 `127.0.0.1:9877`，切回其它模型会自动关闭桥。GLM 系列、gpt-5.6-luna、kimi-k2.7+、mimo、minimax 仍因网关格式限制无法使用（列表里不会出现）。*OpenCode Pro now works via the built-in local bridge; the remaining gateway-incompatible models are filtered out.*
 - **新聊天报 `tools[...].function: missing field name`**：这是 OpenCode 网关不接受搜索工具导致的。重新双击 bat 切换一次你选的模型即可——新版切换器会自动关闭这些模型的搜索工具。*This error*: the OpenCode gateway rejects the search tools; rerun the switcher once and it auto-disables them.
-- **选 Pro / GLM / Luna 后新聊天报 `messages[...]: missing field id`**：OpenCode 网关对这些模型的请求格式要求比 Codex 发送的更严格（Codex 的多轮消息不带 id），属于网关限制；按上面说明改用官方 API 的 Pro，或在 OpenCode 里用四个可用模型。*"missing field id" on Pro/GLM/Luna*: a gateway format limitation; use option 2 for Pro or the four working OpenCode models.
+- **选 Pro 后新聊天报 `messages[...]: missing field id`**：这是旧版本/旧配置的提示；重新双击 bat、选 Pro，新版会自动启动本地桥转换格式（菜单里会显示 "via local Pro bridge"），然后开【新的】聊天窗口即可。GLM / Luna 等仍属网关限制，无法使用。*"missing field id" on Pro*: rerun the switcher and pick Pro again - the built-in bridge converts the format automatically; GLM/Luna remain unsupported by the gateway.
+- **选了 Pro，本机没装 Python 怎么办？**：切换器会依次查找 `python`、`py` 和 Codex 运行时自带的 python，一般无需手动安装；若提示找不到 Python，装一个（勾选 Add to PATH）或换个网络环境重试。*Python requirement*: the switcher auto-finds python, including the one bundled with Codex's runtime.
 - **提示找不到 Codex**：启动器会自动识别 Codex、ChatGPT、GPT(beta)；仍失败就手动打开，并把窗口里列出的候选应用名发给作者。*Codex not found*: the launcher detects Codex, ChatGPT and GPT(beta) automatically; if it still fails, open Codex manually.
 
 ## 隐私说明 / Privacy

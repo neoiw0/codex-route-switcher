@@ -18,6 +18,9 @@ $OpenCodeProxyBaseUrl = 'https://opencode.ai/zen/go/v1'
 $OpenCodeModelsUrl = 'https://opencode.ai/zen/go/v1/models'
 $DeepSeekBaseUrl = 'https://api.deepseek.com'
 $FoxBaseUrl = 'https://dm-fox.rjj.cc/codex/v1'
+$OpenCodeProBridgeUrl = 'http://127.0.0.1:9877/v1'
+$OpenCodeProBridgePort = 9877
+$OpenCodeProBridgeScript = Join-Path $PSScriptRoot 'codex-opencode-pro-bridge.py'
 $DeepSeekContextWindow = 1000000
 $DefaultContextWindow = 272000
 $DeepSeekReviewModel = 'deepseek-v4-flash'
@@ -33,13 +36,15 @@ $SwitcherCatalogMarker = 'route-switcher-deepseek-catalog.json'
 $SearchTolerantModels = @('deepseek-v4-flash', 'gpt-5.6-luna')
 
 # OpenCode Go 可用模型（已验证能被 Codex 使用，Responses 格式）。网关返回的
-# 其它模型会被过滤，避免选到后报错。实测（真实多轮会话载荷）：只有
-# deepseek-v4-flash / hy3 / kimi-k2.5 / kimi-k2.6 能通过 OpenCode 网关；
-# deepseek-v4-pro / GLM 系列 / gpt-5.6-luna / kimi-k2.7+ / mimo / minimax
-# 会因网关对消息格式（missing field id、role tool 等）要求过严而失败。
-# Pro 请用菜单 2（DeepSeek 官方 API）。
+# 其它模型会被过滤，避免选到后报错。实测（真实多轮会话载荷）：flash / hy3 /
+# kimi-k2.5 / kimi-k2.6 可直连；deepseek-v4-pro 必须经内置本地桥
+# (codex-opencode-pro-bridge.py) 自动转换消息格式（补 id、function_call 转
+# tool_calls、补齐 SSE 事件），选 Pro 时切换器会自动启动桥并把 base_url 指向
+# 本地 127.0.0.1:9877。GLM 系列 / gpt-5.6-luna / kimi-k2.7+ / mimo / minimax
+# 仍因网关格式限制无法使用（列表里不会出现）。
 $OpenCodeModels = @(
     'deepseek-v4-flash',
+    'deepseek-v4-pro',
     'hy3',
     'kimi-k2.5', 'kimi-k2.6'
 )
@@ -257,6 +262,86 @@ function Stop-CodexProcesses {
             }
         }
         Start-Sleep -Milliseconds 500
+    }
+}
+
+function Get-BridgePython {
+    # 依次尝试: PATH 里的 python / py launcher / Codex 运行时自带的 python
+    foreach ($candidate in @('python', 'py')) {
+        $cmd = Get-Command $candidate -ErrorAction SilentlyContinue
+        if ($null -ne $cmd) {
+            return @{ Executable = $cmd.Source; UseLauncher = ($candidate -eq 'py') }
+        }
+    }
+    $runtimePython = Get-ChildItem (Join-Path $env:USERPROFILE '.cache\codex-runtimes') `
+        -Recurse -Filter 'python.exe' -ErrorAction SilentlyContinue |
+        Select-Object -First 1
+    if ($null -ne $runtimePython) {
+        return @{ Executable = $runtimePython.FullName; UseLauncher = $false }
+    }
+    return $null
+}
+
+function Start-OpenCodeProBridge {
+    $listener = Get-NetTCPConnection -LocalPort $OpenCodeProBridgePort -State Listen -ErrorAction SilentlyContinue
+    if ($null -ne $listener) {
+        Write-Log "pro bridge: already listening on port $OpenCodeProBridgePort"
+        return $true
+    }
+    if (-not (Test-Path -LiteralPath $OpenCodeProBridgeScript)) {
+        Write-Log "pro bridge: missing script $OpenCodeProBridgeScript"
+        Write-Host "  ERROR: missing $OpenCodeProBridgeScript (it must sit next to this script)"
+        return $false
+    }
+    $python = Get-BridgePython
+    if ($null -eq $python) {
+        Write-Log 'pro bridge: python not found'
+        Write-Host '  ERROR: Python not found. Install Python or open a console where `python` works, then rerun.'
+        return $false
+    }
+    if ($python.UseLauncher) {
+        $args = @('-3', $OpenCodeProBridgeScript, [string]$OpenCodeProBridgePort)
+    }
+    else {
+        $args = @($OpenCodeProBridgeScript, [string]$OpenCodeProBridgePort)
+    }
+    $proc = Start-Process -FilePath $python.Executable -ArgumentList $args -WindowStyle Hidden -PassThru
+    Write-Log "pro bridge: started python pid=$($proc.Id) script=$OpenCodeProBridgeScript"
+    $deadline = (Get-Date).AddSeconds(15)
+    while ((Get-Date) -lt $deadline) {
+        Start-Sleep -Milliseconds 500
+        $listener = Get-NetTCPConnection -LocalPort $OpenCodeProBridgePort -State Listen -ErrorAction SilentlyContinue
+        if ($null -ne $listener) {
+            Write-Log "pro bridge: listening on port $OpenCodeProBridgePort"
+            return $true
+        }
+        if ($proc.HasExited) {
+            Write-Log "pro bridge: python exited early, code=$($proc.ExitCode)"
+            Write-Host '  ERROR: the Pro bridge failed to start (see %TEMP%\codex-opencode-pro-bridge.log).'
+            return $false
+        }
+    }
+    Write-Log 'pro bridge: start timeout'
+    Write-Host '  ERROR: the Pro bridge did not start in time.'
+    return $false
+}
+
+function Stop-OpenCodeProBridge {
+    $listener = Get-NetTCPConnection -LocalPort $OpenCodeProBridgePort -State Listen -ErrorAction SilentlyContinue
+    if ($null -eq $listener) {
+        return
+    }
+    foreach ($conn in $listener) {
+        try {
+            $owner = Get-CimInstance Win32_Process -Filter "ProcessId=$($conn.OwningProcess)" -ErrorAction SilentlyContinue
+            if ($null -ne $owner -and $owner.CommandLine -like '*codex-opencode-pro-bridge.py*') {
+                Stop-Process -Id $conn.OwningProcess -Force -ErrorAction Stop
+                Write-Log "pro bridge: stopped pid=$($conn.OwningProcess)"
+            }
+        }
+        catch {
+            Write-Log "pro bridge: stop failed pid=$($conn.OwningProcess): $($_.Exception.Message)"
+        }
     }
 }
 
@@ -871,7 +956,10 @@ function Update-Route {
     Write-Log "supplier=$Supplier model=$Model model_context_window=$contextWindow review_model=$reviewModel default_effort=$defaultEffort enabled_efforts=$($enabledEfforts -join ',') web_search=$webSearchMode search_tools=$searchTolerant"
 
     $supplierLabel = switch ($Supplier) {
-        'opencode' { 'CC (OpenCode Go direct)' }
+        'opencode' {
+            if ($Model -eq 'deepseek-v4-pro') { 'CC (OpenCode Go via local Pro bridge)' }
+            else { 'CC (OpenCode Go direct)' }
+        }
         'deepseek' { 'CC (DeepSeek official API)' }
         'fox' { 'CC (Fox direct)' }
         default { 'CC' }
@@ -1182,10 +1270,20 @@ try {
             Get-OrSetApiKey -EnvironmentKey 'OPENCODE_API_KEY'
             $model = Select-FromList -Title 'OpenCode Go 可用模型' -Items (Get-OpenCodeModels)
             $supplier = 'opencode'
-            $baseUrl = $OpenCodeProxyBaseUrl
             $environmentKey = 'OPENCODE_API_KEY'
+            if ($model -eq 'deepseek-v4-pro') {
+                if (-not (Start-OpenCodeProBridge)) {
+                    throw 'Pro bridge failed to start.'
+                }
+                $baseUrl = $OpenCodeProBridgeUrl
+            }
+            else {
+                Stop-OpenCodeProBridge
+                $baseUrl = $OpenCodeProxyBaseUrl
+            }
         }
         '2' {
+            Stop-OpenCodeProBridge
             Get-OrSetApiKey -EnvironmentKey 'DEEPSEEK_API_KEY'
             $display = Select-FromList -Title 'DeepSeek 官方 API 模型' -Items @('deepseek-v4-flash', 'deepseek-v4-pro-0813')
             $model = $DeepSeekMenuToApiModel[$display]
@@ -1194,6 +1292,7 @@ try {
             $environmentKey = 'DEEPSEEK_API_KEY'
         }
         '3' {
+            Stop-OpenCodeProBridge
             Get-OrSetApiKey -EnvironmentKey 'FOX_API_KEY'
             $model = Select-FromList -Title 'Fox 模型' -Items (Get-FoxModels)
             $supplier = 'fox'
