@@ -29,7 +29,7 @@
 
 OpenCode 里目前有 5 个模型能用：DeepSeek Flash、DeepSeek Pro、Hy3、Kimi K2.5、Kimi K2.6（菜单里只显示这些）。
 选 DeepSeek Pro 时，脚本会自动打开一个小工具（本地桥）把格式转换好，不用你手动管；切回其它模型时它会自动关闭。
-OpenCode 的 Pro 走纯对话模式（不调用工具），任何问题都能稳定回答；需要改文件、跑命令请选第 2 项 DeepSeek 官方 API 的 Pro。
+OpenCode 的 Pro 能用工具（改文件、计划、目标、图片、节点脚本等都已实测正常），只有"跑 shell 命令"会卡死应用所以被自动禁用；需要跑命令请选第 2 项 DeepSeek 官方 API 的 Pro。
 也可以用 DeepSeek 官方 API 的 Pro：选第 2 项，需要先去 https://platform.deepseek.com 注册并创建 API Key（sk- 开头）。
 
 OpenCode 可以用我的邀请码，双方多得5刀 ：https://opencode.ai/go?ref=PS30TF3NRR

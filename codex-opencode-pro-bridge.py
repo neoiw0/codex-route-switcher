@@ -26,6 +26,10 @@ LOG = os.path.join(os.environ.get("TEMP", "."), "codex-opencode-pro-bridge.log")
 BODYCAPTURE = os.environ.get("CODEX_BODY_CAPTURE", "")  # 诊断用：落盘请求正文（默认关）
 SSEDUMP = os.environ.get("CODEX_SSE_DUMP", "")  # 诊断用：落盘转发的 SSE 流（默认关）
 KEEP_TOOLS = os.environ.get("CODEX_KEEP_TOOLS", "") == "1"  # 诊断/CLI 用：保留工具
+KEEP_TOOLS_LIST = os.environ.get("CODEX_KEEP_TOOLS_LIST", "")  # 白名单（逗号分隔），只保留这些工具
+# 默认只禁用这两个：shell_command 的工具轮会让桌面版在工具执行后卡死；
+# request_user_input 会主动暂停回合（表现为"卡住"）。
+DEFAULT_STRIP_TOOLS = {"shell_command", "request_user_input"}
 LOCK = threading.Lock()
 
 
@@ -193,10 +197,27 @@ class Handler(BaseHTTPRequestHandler):
                     # 卡死（应用内部行为，无法修复）。默认去掉工具，让 Pro 以
                     # 纯对话模式稳定运行；flash / DeepSeek 官方不受影响。
                     tool_count = len(parsed["tools"])
-                    parsed.pop("tools", None)
-                    parsed.pop("tool_choice", None)
-                    parsed.pop("parallel_tool_calls", None)
-                    log_rec({"tools_stripped": tool_count})
+                    if KEEP_TOOLS_LIST:
+                        names = set(n.strip() for n in KEEP_TOOLS_LIST.split(",") if n.strip())
+                        kept = [t for t in parsed["tools"] if isinstance(t, dict) and t.get("name") in names]
+                        stripped = tool_count - len(kept)
+                        if kept:
+                            parsed["tools"] = kept
+                        else:
+                            parsed.pop("tools", None)
+                        parsed.pop("tool_choice", None)
+                        parsed.pop("parallel_tool_calls", None)
+                        log_rec({"tools_whitelist": KEEP_TOOLS_LIST, "kept": len(kept), "stripped": stripped})
+                    else:
+                        kept = [t for t in parsed["tools"] if isinstance(t, dict) and t.get("name") not in DEFAULT_STRIP_TOOLS]
+                        stripped = tool_count - len(kept)
+                        if kept:
+                            parsed["tools"] = kept
+                        else:
+                            parsed.pop("tools", None)
+                        parsed.pop("tool_choice", None)
+                        parsed.pop("parallel_tool_calls", None)
+                        log_rec({"tools_kept": len(kept), "tools_stripped_default": stripped})
                 forwarded = json.dumps(parsed, ensure_ascii=False).encode("utf-8")
         except Exception as exc:
             log_rec({"parse_error": str(exc)})
