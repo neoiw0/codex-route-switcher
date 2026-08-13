@@ -24,6 +24,9 @@
 - 说明上次切换后旧进程没有完全退出；先把 Codex 完全退出（任务栏右键-退出），再双击 bat 重新切换一次，然后开【新的】聊天窗口；
 - 或者先直接复用已经正常的旧聊天窗口。
 
+如果新开的聊天窗口第一条消息报 "tools...missing field name"（切到 Pro、GLM、Kimi 等模型时）：
+- 这是 OpenCode 网关不认搜索工具导致的，不是你弄错了；重新双击 bat、重新选一次你想要的模型（新版会自动处理好），然后开【新的】聊天窗口即可。
+
 OpenCode 可以用我的邀请码，双方多得5刀 ：https://opencode.ai/go?ref=PS30TF3NRR
 
 OpenCode： Deepseek，Kimi等开源模型和Luna， 1.5折左右

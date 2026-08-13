@@ -25,12 +25,20 @@ $DeepSeekCatalogFileName = 'route-switcher-deepseek-catalog.json'
 $DeepSeekCatalogBackupName = 'route-switcher-catalog-backup.txt'
 $SwitcherCatalogMarker = 'route-switcher-deepseek-catalog.json'
 
+# OpenCode 网关对搜索工具（web_search / tool_search）兼容的模型：实测只有
+# flash 与 luna 能接受这两个工具；其它模型会在请求时报
+# "tools[...].function: missing field name" 或 400/422。切换器会自动给
+# 其余模型关闭搜索工具（目录 supports_search_tool=false + config 顶层
+# web_search=disabled），这样它们才能正常对话。
+$SearchTolerantModels = @('deepseek-v4-flash', 'gpt-5.6-luna')
+
 # OpenCode Go 可用模型（已验证能被 Codex 使用，Responses 格式）。网关返回的
-# 其它模型（qwen*、minimax-m3 等）会被过滤，避免选到后报错。
+# 其它模型（qwen*、minimax-m3 等）会被过滤，避免选到后报错。grok-4.5 实测
+# 会被网关拒绝（不识别 namespace/custom 工具，Codex 必用），已从列表移除。
 $OpenCodeModels = @(
     'deepseek-v4-flash', 'deepseek-v4-pro',
     'glm-5', 'glm-5.1', 'glm-5.2',
-    'gpt-5.6-luna', 'grok-4.5', 'hy3',
+    'gpt-5.6-luna', 'hy3',
     'kimi-k2.5', 'kimi-k2.6', 'kimi-k2.7-code', 'kimi-k3',
     'mimo-v2.5', 'mimo-v2.5-pro',
     'minimax-m2.7'
@@ -609,6 +617,53 @@ function Get-ModelEffort {
     return $ModelEffortMap['*']
 }
 
+function Update-CatalogSearchFlags {
+    # 让活动模型目录与 OpenCode 网关的搜索工具兼容性保持一致：
+    # 只有 $SearchTolerantModels 里的模型保留 supports_search_tool=true，
+    # 其余模型全部改为 false（配合 config 顶层 web_search=disabled，
+    # 请求里就不再出现 web_search / tool_search，网关才不会拒绝）。
+    $catalogValue = Get-ConfigValue -Key 'model_catalog_json'
+    if ([string]::IsNullOrWhiteSpace($catalogValue)) {
+        Write-Log 'catalog search flags: no model_catalog_json in config, skipped'
+        return
+    }
+    $catalogPath = $catalogValue.Trim().Trim("'").Trim('"')
+    if (-not (Test-Path -LiteralPath $catalogPath)) {
+        Write-Log "catalog search flags: catalog file not found: $catalogPath"
+        return
+    }
+    $backupPath = $catalogPath + '.search-flags-backup.json'
+    if (-not (Test-Path -LiteralPath $backupPath)) {
+        Copy-Item -LiteralPath $catalogPath -Destination $backupPath -Force
+        Write-Log "catalog search flags: backup created: $backupPath"
+    }
+    try {
+        $catalog = Get-Content -LiteralPath $catalogPath -Raw | ConvertFrom-Json
+        $changed = 0
+        foreach ($model in @($catalog.models)) {
+            $target = $SearchTolerantModels -contains $model.slug
+            $current = $model.supports_search_tool
+            if ($current -ne $target) {
+                $model.supports_search_tool = $target
+                $changed++
+            }
+        }
+        if ($changed -gt 0) {
+            $json = $catalog | ConvertTo-Json -Depth 100
+            [System.IO.File]::WriteAllText($catalogPath, $json, [System.Text.UTF8Encoding]::new($false))
+            Write-Log "catalog search flags: updated $changed model(s) in $catalogPath"
+            Write-Host "  Web search tools: auto-disabled for $changed model(s) (only flash/luna keep them)"
+        }
+        else {
+            Write-Log 'catalog search flags: already consistent, no change'
+        }
+    }
+    catch {
+        Write-Log "catalog search flags FAILED: $($_.Exception.Message)"
+        Write-Host "  WARN: could not patch catalog search flags: $($_.Exception.Message)"
+    }
+}
+
 function Get-OpenCodeModels {
     try {
         $key = [Environment]::GetEnvironmentVariable('OPENCODE_API_KEY', 'User')
@@ -778,6 +833,8 @@ function Update-Route {
     $isDeepSeek = $Model -like 'deepseek-*'
     $contextWindow = if ($isDeepSeek) { $DeepSeekContextWindow } else { $DefaultContextWindow }
     $reviewModel = if ($isDeepSeek) { $DeepSeekReviewModel } else { $Model }
+    $searchTolerant = $SearchTolerantModels -contains $Model
+    $webSearchMode = if ($searchTolerant) { 'cached' } else { 'disabled' }
 
     $text = [System.IO.File]::ReadAllText($ConfigPath)
     $text = Set-TomlValue -Text $text -Section '' -Key 'model_provider' -Value (TomlString 'CC')
@@ -785,6 +842,7 @@ function Update-Route {
     $text = Set-TomlValue -Text $text -Section '' -Key 'model_reasoning_effort' -Value (TomlString $defaultEffort)
     $text = Set-TomlValue -Text $text -Section '' -Key 'model_context_window' -Value ([string]$contextWindow)
     $text = Set-TomlValue -Text $text -Section '' -Key 'review_model' -Value (TomlString $reviewModel)
+    $text = Set-TomlValue -Text $text -Section '' -Key 'web_search' -Value (TomlString $webSearchMode)
     $text = Set-TomlValue -Text $text -Section 'model_providers.CC' -Key 'name' -Value (TomlString 'CC')
     $text = Set-TomlValue -Text $text -Section 'model_providers.CC' -Key 'base_url' -Value (TomlString $BaseUrl)
     $text = Set-TomlValue -Text $text -Section 'model_providers.CC' -Key 'wire_api' -Value (TomlString 'responses')
@@ -803,7 +861,8 @@ function Update-Route {
         $text = Restore-UserCatalog -Text $text
     }
     [System.IO.File]::WriteAllText($ConfigPath, $text, [System.Text.UTF8Encoding]::new($false))
-    Write-Log "supplier=$Supplier model=$Model model_context_window=$contextWindow review_model=$reviewModel default_effort=$defaultEffort enabled_efforts=$($enabledEfforts -join ',')"
+    Update-CatalogSearchFlags
+    Write-Log "supplier=$Supplier model=$Model model_context_window=$contextWindow review_model=$reviewModel default_effort=$defaultEffort enabled_efforts=$($enabledEfforts -join ',') web_search=$webSearchMode search_tools=$searchTolerant"
 
     $supplierLabel = switch ($Supplier) {
         'opencode' { 'CC (OpenCode Go direct)' }
@@ -819,6 +878,7 @@ function Update-Route {
     Write-Host "  default effort: $defaultEffort (adjust it in Codex among: $($enabledEfforts -join ', '))"
     Write-Host "  context window: $contextWindow"
     Write-Host "  review model: $reviewModel"
+    Write-Host "  web search tools: $(if ($searchTolerant) { 'on' } else { 'off (OpenCode gateway requirement for this model)' })"
 }
 
 function Update-SessionProvider {

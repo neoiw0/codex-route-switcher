@@ -17,6 +17,7 @@ A one-click tool that switches Codex Desktop's API route to third-party supplier
 - 思考强度不用手动选：切换器按模型自动设置可用档位，打开 Codex 后可在聊天窗口里调节（只显示该模型支持的档位）。No manual reasoning-effort question; the app offers only the levels each model supports.
 - 每次切换都会自动把所有旧聊天同步成你选的模型（先备份状态数据库），旧聊天不再停留在旧模型。Every switch automatically syncs all old chats to the model you pick (state database is backed up first).
 - DeepSeek 官方选项会自动写入官方 Codex 模型目录（`~/.codex/route-switcher-deepseek-catalog.json`），确保 apply_patch 工具、1M 上下文和思考档位都正常；切回 OpenCode/Fox 时自动恢复你原来的模型目录设置。The DeepSeek option writes the official Codex model catalog automatically and restores your previous catalog setting when you switch back.
+- OpenCode 网关只兼容 flash / luna 的搜索工具（web_search / tool_search），其它模型（Pro、GLM、Kimi、Mimo 等）带着搜索工具会被网关拒绝。切换器会自动给这些模型关闭搜索工具（`web_search = "disabled"` + 目录 `supports_search_tool=false`），Pro 及其它模型因此都能正常对话。Only flash/luna tolerate the search tools on OpenCode; the switcher auto-disables them for every other model so Pro/GLM/Kimi etc. all work.
 - 配置永久生效：重启电脑后直接打开 Codex 即可，无需再次运行。The config is permanent and survives reboots.
 
 No API keys are bundled. Keys live only in your Windows user environment variables. No local proxy or watchdog is required.
@@ -100,6 +101,8 @@ Models: `deepseek-v4-flash` and `deepseek-v4-pro-0813` (the official stable buil
 - **旧聊天记录打不开 / 消失（之前用 Fox 等供应商）**：运行切换器输入 `5`，脚本会备份状态数据库，把数据库和所有旧会话的供应商改写成 CC（只改名字，聊天模型不变），然后完全退出重开 Codex 即可。*Old chats fail to open / disappear*: run the switcher and enter `5`; it backs up the state database and rewrites only the provider to CC (chat models are kept), then fully quit and reopen Codex.
 - **旧聊天仍显示旧模型（如 luna）**：正常切换一次即可——每次切换时脚本都会自动把所有旧聊天同步成你选的模型，不用单独操作。*Old chats still show a stale model (e.g. luna)*: just run a normal switch; every switch automatically syncs all old chats to the model you picked.
 - **新聊天第一条消息报 `Invalid schema for function 'automation_update'`**：说明上次切换后旧进程没有完全退出。先完全退出 Codex（任务栏右键 -> 退出），再双击 bat 重新切换一次，然后开【新的】聊天窗口；或者先复用已经正常的旧聊天窗口。本版已改为自动完全退出进程，正常流程不会再遇到。*New chat shows this error*: fully quit Codex, rerun the switcher, then open a new chat (or reuse a healthy old chat).
+- **切到 Pro（或 GLM/Kimi/Mimo 等模型）后新聊天报 `tools[...].function: missing field name`**：这是 OpenCode 网关不接受搜索工具导致的，不是你的配置问题。重新双击 bat 切换一次你选的模型即可——新版切换器会自动给这些模型关闭搜索工具（只有 flash / luna 保留）。之后正常开新聊天。*Pro/GLM/Kimi fail with "tools[...].function: missing field name"*: the OpenCode gateway rejects the search tools; rerun the switcher once and it auto-disables them for that model.
+- **模型列表里没有 grok-4.5 了**：实测 OpenCode 网关连 Codex 必须的 namespace / apply_patch(custom) 工具都拒绝，选 grok 必定报错，所以从列表移除；minimax-m2.7 保留（桌面版格式实测可用）。*grok-4.5 was removed*: the gateway rejects Codex's required namespace/custom tools for it; minimax-m2.7 stays (verified working in desktop format).
 - **提示找不到 Codex**：启动器会自动识别 Codex、ChatGPT、GPT(beta)；仍失败就手动打开，并把窗口里列出的候选应用名发给作者。*Codex not found*: the launcher detects Codex, ChatGPT and GPT(beta) automatically; if it still fails, open Codex manually.
 
 ## 隐私说明 / Privacy
