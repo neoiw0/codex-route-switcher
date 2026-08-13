@@ -33,15 +33,15 @@ $SwitcherCatalogMarker = 'route-switcher-deepseek-catalog.json'
 $SearchTolerantModels = @('deepseek-v4-flash', 'gpt-5.6-luna')
 
 # OpenCode Go 可用模型（已验证能被 Codex 使用，Responses 格式）。网关返回的
-# 其它模型（qwen*、minimax-m3 等）会被过滤，避免选到后报错。grok-4.5 实测
-# 会被网关拒绝（不识别 namespace/custom 工具，Codex 必用），已从列表移除。
+# 其它模型会被过滤，避免选到后报错。实测（真实多轮会话载荷）：只有
+# deepseek-v4-flash / hy3 / kimi-k2.5 / kimi-k2.6 能通过 OpenCode 网关；
+# deepseek-v4-pro / GLM 系列 / gpt-5.6-luna / kimi-k2.7+ / mimo / minimax
+# 会因网关对消息格式（missing field id、role tool 等）要求过严而失败。
+# Pro 请用菜单 2（DeepSeek 官方 API）。
 $OpenCodeModels = @(
-    'deepseek-v4-flash', 'deepseek-v4-pro',
-    'glm-5', 'glm-5.1', 'glm-5.2',
-    'gpt-5.6-luna', 'hy3',
-    'kimi-k2.5', 'kimi-k2.6', 'kimi-k2.7-code', 'kimi-k3',
-    'mimo-v2.5', 'mimo-v2.5-pro',
-    'minimax-m2.7'
+    'deepseek-v4-flash',
+    'hy3',
+    'kimi-k2.5', 'kimi-k2.6'
 )
 
 # DeepSeek 官方 API 模型（菜单显示名 -> Codex 配置中的模型 ID）。
