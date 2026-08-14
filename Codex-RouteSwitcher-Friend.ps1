@@ -36,12 +36,11 @@ $SwitcherCatalogMarker = 'route-switcher-deepseek-catalog.json'
 $SearchTolerantModels = @('deepseek-v4-flash', 'gpt-5.6-luna')
 
 # OpenCode Go 可用模型（已验证能被 Codex 使用，Responses 格式）。网关返回的
-# 其它模型会被过滤，避免选到后报错。实测（真实多轮会话载荷）：flash / hy3 /
-# kimi-k2.5 / kimi-k2.6 可直连；deepseek-v4-pro 必须经内置本地桥
-# (codex-opencode-pro-bridge.py) 自动转换消息格式（补 id、function_call 转
-# tool_calls、补齐 SSE 事件），选 Pro 时切换器会自动启动桥并把 base_url 指向
-# 本地 127.0.0.1:9877。GLM 系列 / gpt-5.6-luna / kimi-k2.7+ / mimo / minimax
-# 仍因网关格式限制无法使用（列表里不会出现）。
+# 其它模型会被过滤，避免选到后报错。实测（真实多轮会话载荷 + 桌面版端到端）：
+# flash / hy3 / kimi-k2.5 / kimi-k2.6 以及 deepseek-v4-pro 均可直连，Pro 的
+# 工具轮（含 shell 命令）也已确认可用（官方网关已修复）。GLM 系列 /
+# gpt-5.6-luna / kimi-k2.7+ / mimo / minimax 仍因网关格式限制无法使用（列表里
+# 不会出现）。codex-opencode-pro-bridge.py 保留作为可选回退，正常流程不使用。
 $OpenCodeModels = @(
     'deepseek-v4-flash',
     'deepseek-v4-pro',
@@ -956,10 +955,7 @@ function Update-Route {
     Write-Log "supplier=$Supplier model=$Model model_context_window=$contextWindow review_model=$reviewModel default_effort=$defaultEffort enabled_efforts=$($enabledEfforts -join ',') web_search=$webSearchMode search_tools=$searchTolerant"
 
     $supplierLabel = switch ($Supplier) {
-        'opencode' {
-            if ($Model -eq 'deepseek-v4-pro') { 'CC (OpenCode Go via local Pro bridge)' }
-            else { 'CC (OpenCode Go direct)' }
-        }
+        'opencode' { 'CC (OpenCode Go direct)' }
         'deepseek' { 'CC (DeepSeek official API)' }
         'fox' { 'CC (Fox direct)' }
         default { 'CC' }
@@ -1271,16 +1267,8 @@ try {
             $model = Select-FromList -Title 'OpenCode Go 可用模型' -Items (Get-OpenCodeModels)
             $supplier = 'opencode'
             $environmentKey = 'OPENCODE_API_KEY'
-            if ($model -eq 'deepseek-v4-pro') {
-                if (-not (Start-OpenCodeProBridge)) {
-                    throw 'Pro bridge failed to start.'
-                }
-                $baseUrl = $OpenCodeProBridgeUrl
-            }
-            else {
-                Stop-OpenCodeProBridge
-                $baseUrl = $OpenCodeProxyBaseUrl
-            }
+            Stop-OpenCodeProBridge
+            $baseUrl = $OpenCodeProxyBaseUrl
         }
         '2' {
             Stop-OpenCodeProBridge
