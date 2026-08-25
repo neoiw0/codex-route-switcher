@@ -1,7 +1,7 @@
 ﻿# Codex-RouteSwitcher-Friend.ps1
-# 三合一版：OpenCode Go / DeepSeek 官方 API / Fox。
+# 四合一版：OpenCode Go / DeepSeek 官方 API / Fox / 超算中心（SCNet）。
 # 本脚本不含任何 API Key：密钥由用户输入，只保存在 Windows 用户环境变量中。
-# Three-in-one edition: OpenCode Go / DeepSeek official API / Fox.
+# All-in-one edition: OpenCode Go / DeepSeek official API / Fox / SCNet.
 # This script contains NO API keys; keys are typed by the user and saved to
 # Windows user environment variables only.
 [CmdletBinding()]
@@ -18,6 +18,13 @@ $OpenCodeProxyBaseUrl = 'https://opencode.ai/zen/go/v1'
 $OpenCodeModelsUrl = 'https://opencode.ai/zen/go/v1/models'
 $DeepSeekBaseUrl = 'https://api.deepseek.com'
 $FoxBaseUrl = 'https://dm-fox.rjj.cc/codex/v1'
+# 超算中心（国家超算互联网 SCNet）：OpenAI 兼容 chat completions 接口，
+# wire_api 用 "chat"（其余供应商都是 "responses"）。接入方式参考本机 DSH 的
+# llm-pi-ai.providers.scnet-deepseek 配置；密钥环境变量为 SCNET_API_KEY。
+# 注意：DeepSeek-V4-Flash-0731-Event 是活动期模型，可能间歇性请求不通
+# （额度/活动结束等），仍保留在菜单里供选择，失败时换模型或稍后再试。
+$ScnetBaseUrl = 'https://api.scnet.cn/api/llm/v1'
+$ScnetModels = @('DeepSeek-V4-Flash-0731-Event')
 $OpenCodeProBridgeUrl = 'http://127.0.0.1:9877/v1'
 $OpenCodeProBridgePort = 9877
 $OpenCodeProBridgeScript = Join-Path $PSScriptRoot 'codex-opencode-pro-bridge.py'
@@ -691,6 +698,10 @@ function Get-ModelEffort {
         # DeepSeek 官方 API：flash 与 pro-0813 均支持 low/high/max，默认 high
         return @{ Enabled = @('low', 'high', 'max'); Default = 'high' }
     }
+    if ($Supplier -eq 'scnet') {
+        # 超算中心 SCNet：DeepSeek-V4-Flash-0731-Event 支持 high/max，默认 high
+        return @{ Enabled = @('high', 'max'); Default = 'high' }
+    }
     $key = $Model.ToLowerInvariant()
     if ($ModelEffortMap.ContainsKey($key)) {
         return $ModelEffortMap[$key]
@@ -835,6 +846,7 @@ function Test-SupplierConnection {
     Write-Host '  1) OpenCode Go'
     Write-Host '  2) DeepSeek 官方 API'
     Write-Host '  3) Fox'
+    Write-Host '  4) 超算中心（SCNet）'
     $target = Read-Host 'Test which supplier'
     switch ($target) {
         '1' {
@@ -852,6 +864,11 @@ function Test-SupplierConnection {
             $url = $FoxBaseUrl.TrimEnd('/') + '/responses'
             $networkHint = 'Check your network to dm-fox.rjj.cc (no local proxy is needed).'
         }
+        '4' {
+            $keyName = 'SCNET_API_KEY'
+            $url = $ScnetBaseUrl.TrimEnd('/') + '/chat/completions'
+            $networkHint = 'Check your network to api.scnet.cn (no local proxy is needed).'
+        }
         default { throw 'Invalid selection.' }
     }
 
@@ -860,12 +877,24 @@ function Test-SupplierConnection {
         throw "Key $keyName is not saved yet. Run the switch first."
     }
 
-    $payload = @{
-        model             = 'deepseek-v4-flash'
-        input             = 'Reply with exactly: OK'
-        max_output_tokens = 64
-        reasoning         = @{ effort = 'low' }
-    } | ConvertTo-Json -Depth 5
+    if ($target -eq '4') {
+        # SCNet 是 OpenAI 兼容的 chat completions 接口，用聊天格式探测。
+        # 探测消息故意带中文，验证中文链路；ConvertTo-Json 会把中文转义成
+        # \uXXXX（纯 ASCII 报文），传输层不会出现编码错乱。
+        $payload = @{
+            model      = $ScnetModels[0]
+            messages   = @(@{ role = 'user'; content = '请只回复两个字：收到' })
+            max_tokens = 64
+        } | ConvertTo-Json -Depth 5
+    }
+    else {
+        $payload = @{
+            model             = 'deepseek-v4-flash'
+            input             = 'Reply with exactly: OK'
+            max_output_tokens = 64
+            reasoning         = @{ effort = 'low' }
+        } | ConvertTo-Json -Depth 5
+    }
     $body = [System.Text.Encoding]::UTF8.GetBytes($payload)
 
     Write-Host ''
@@ -876,9 +905,16 @@ function Test-SupplierConnection {
             -Headers @{ Authorization = "Bearer $key" } `
             -ContentType 'application/json' -Body $body -TimeoutSec 40
         $stopwatch.Stop()
-        $hasMessage = @($response.output | Where-Object { $_.type -eq 'message' }).Count -gt 0
-        Write-Host ("OK in {0:N1}s. model={1} status={2} contentReceived={3}" -f `
-            $stopwatch.Elapsed.TotalSeconds, $response.model, $response.status, $hasMessage)
+        if ($target -eq '4') {
+            $content = $response.choices[0].message.content
+            Write-Host ("OK in {0:N1}s. model={1} content={2}" -f `
+                $stopwatch.Elapsed.TotalSeconds, $response.model, $content)
+        }
+        else {
+            $hasMessage = @($response.output | Where-Object { $_.type -eq 'message' }).Count -gt 0
+            Write-Host ("OK in {0:N1}s. model={1} status={2} contentReceived={3}" -f `
+                $stopwatch.Elapsed.TotalSeconds, $response.model, $response.status, $hasMessage)
+        }
         Write-Log ("test OK {0} in {1:N1}s" -f $url, $stopwatch.Elapsed.TotalSeconds)
     }
     catch {
@@ -920,9 +956,10 @@ function Update-Route {
     $effortInfo = Get-ModelEffort -Model $Model -Supplier $Supplier
     $defaultEffort = $effortInfo.Default
     $enabledEfforts = $effortInfo.Enabled
-    $isDeepSeek = $Model -like 'deepseek-*'
-    $contextWindow = if ($isDeepSeek) { $DeepSeekContextWindow } else { $DefaultContextWindow }
-    $reviewModel = if ($isDeepSeek) { $DeepSeekReviewModel } else { $Model }
+    $isScnet = $Supplier -eq 'scnet'
+    $isDeepSeekModel = $Model -like 'deepseek-*'
+    $contextWindow = if ($isDeepSeekModel -or $isScnet) { $DeepSeekContextWindow } else { $DefaultContextWindow }
+    $reviewModel = if ($isScnet) { $Model } elseif ($isDeepSeekModel) { $DeepSeekReviewModel } else { $Model }
     $searchTolerant = $SearchTolerantModels -contains $Model
     $webSearchMode = if ($searchTolerant) { 'cached' } else { 'disabled' }
 
@@ -935,7 +972,8 @@ function Update-Route {
     $text = Set-TomlValue -Text $text -Section '' -Key 'web_search' -Value (TomlString $webSearchMode)
     $text = Set-TomlValue -Text $text -Section 'model_providers.CC' -Key 'name' -Value (TomlString 'CC')
     $text = Set-TomlValue -Text $text -Section 'model_providers.CC' -Key 'base_url' -Value (TomlString $BaseUrl)
-    $text = Set-TomlValue -Text $text -Section 'model_providers.CC' -Key 'wire_api' -Value (TomlString 'responses')
+    $wireApi = if ($isScnet) { 'chat' } else { 'responses' }
+    $text = Set-TomlValue -Text $text -Section 'model_providers.CC' -Key 'wire_api' -Value (TomlString $wireApi)
     $text = Set-TomlValue -Text $text -Section 'model_providers.CC' -Key 'env_key' -Value (TomlString $EnvironmentKey)
     $text = Set-TomlValue -Text $text -Section 'model_providers.CC' -Key 'requires_openai_auth' -Value 'false'
     $effortsJson = '[ ' + (($enabledEfforts | ForEach-Object { '"' + $_ + '"' }) -join ', ') + ' ]'
@@ -952,12 +990,13 @@ function Update-Route {
     }
     [System.IO.File]::WriteAllText($ConfigPath, $text, [System.Text.UTF8Encoding]::new($false))
     Update-CatalogSearchFlags
-    Write-Log "supplier=$Supplier model=$Model model_context_window=$contextWindow review_model=$reviewModel default_effort=$defaultEffort enabled_efforts=$($enabledEfforts -join ',') web_search=$webSearchMode search_tools=$searchTolerant"
+    Write-Log "supplier=$Supplier model=$Model wire_api=$wireApi model_context_window=$contextWindow review_model=$reviewModel default_effort=$defaultEffort enabled_efforts=$($enabledEfforts -join ',') web_search=$webSearchMode search_tools=$searchTolerant"
 
     $supplierLabel = switch ($Supplier) {
         'opencode' { 'CC (OpenCode Go direct)' }
         'deepseek' { 'CC (DeepSeek official API)' }
         'fox' { 'CC (Fox direct)' }
+        'scnet' { 'CC (SCNet 超算中心 direct)' }
         default { 'CC' }
     }
     $modelLabel = if ($Supplier -eq 'deepseek' -and $Model -eq 'deepseek-v4-pro') { 'deepseek-v4-pro (V4-Pro-0813 official)' } else { $Model }
@@ -968,7 +1007,7 @@ function Update-Route {
     Write-Host "  default effort: $defaultEffort (adjust it in Codex among: $($enabledEfforts -join ', '))"
     Write-Host "  context window: $contextWindow"
     Write-Host "  review model: $reviewModel"
-    Write-Host "  web search tools: $(if ($searchTolerant) { 'on' } else { 'off (OpenCode gateway requirement for this model)' })"
+    Write-Host "  web search tools: $(if ($searchTolerant) { 'on' } else { 'off (this route/model rejects the search tools)' })"
 }
 
 function Update-SessionProvider {
@@ -1234,26 +1273,27 @@ function Start-CodexDirect {
 
 try {
     Write-Log 'switch start'
-    Write-Host 'Codex 路由切换器（三合一版：OpenCode Go / DeepSeek 官方 / Fox）'
+    Write-Host 'Codex 路由切换器（四合一版：OpenCode Go / DeepSeek 官方 / Fox / 超算中心）'
     Write-Host '  1) OpenCode Go（推荐 / 默认）'
     Write-Host '  2) DeepSeek 官方 API'
     Write-Host '  3) Fox（可选）'
-    Write-Host '  4) 测试连接'
-    Write-Host '  5) 修复历史聊天供应商 -> CC（只改名字）'
+    Write-Host '  4) 超算中心 SCNet（DeepSeek）'
+    Write-Host '  5) 测试连接'
+    Write-Host '  6) 修复历史聊天供应商 -> CC（只改名字）'
     $choice = Read-Host '请选择 (直接回车默认 1)'
     if ([string]::IsNullOrWhiteSpace($choice)) { $choice = '1' }
 
     switch ($choice) {
-        '4' {
+        '5' {
             Test-SupplierConnection
             Write-Host ''
             Read-Host 'Press Enter to close'
             exit 0
         }
-        '5' {
+        '6' {
             Write-Host ''
             Write-Host 'This will fully quit Codex, then rewrite the provider of every old chat to CC.'
-            Write-Host 'Each chat keeps its current model (use options 1-3 to sync models).'
+            Write-Host 'Each chat keeps its current model (use options 1-4 to sync models).'
             if (-not (Stop-CodexProcesses)) {
                 throw 'Codex processes did not exit in time. Close them via Task Manager and run again.'
             }
@@ -1286,6 +1326,14 @@ try {
             $supplier = 'fox'
             $baseUrl = $FoxBaseUrl
             $environmentKey = 'FOX_API_KEY'
+        }
+        '4' {
+            Stop-OpenCodeProBridge
+            Get-OrSetApiKey -EnvironmentKey 'SCNET_API_KEY'
+            $model = Select-FromList -Title '超算中心 SCNet 模型' -Items $ScnetModels
+            $supplier = 'scnet'
+            $baseUrl = $ScnetBaseUrl
+            $environmentKey = 'SCNET_API_KEY'
         }
         default { throw 'Invalid selection.' }
     }

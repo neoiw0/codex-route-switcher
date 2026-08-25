@@ -1,17 +1,19 @@
-# Codex Route Switcher（三合一版 / All-in-One Edition）
+# Codex Route Switcher（四合一版 / All-in-One Edition）
 
-一键把 Codex 桌面版的 API 路由切换到第三方供应商，自动改写 `%USERPROFILE%\.codex\config.toml`，随后启动 Codex。支持三种供应商：
+一键把 Codex 桌面版的 API 路由切换到第三方供应商，自动改写 `%USERPROFILE%\.codex\config.toml`，随后启动 Codex。支持四种供应商：
 
 1. **OpenCode Go**（推荐 / 默认）— 直连 `https://opencode.ai/zen/go/v1`，DeepSeek / Kimi / GLM 等开源模型和 Luna，约 1.5 折。
 2. **DeepSeek 官方 API** — 直连 `https://api.deepseek.com`，`deepseek-v4-flash` 与 `deepseek-v4-pro-0813`（官方正式版，1M 上下文，思考档位 low/high/max）。
 3. **Fox**（可选）— 直连 `https://dm-fox.rjj.cc/codex/v1`，各类顶尖闭源模型，约 0.3 折。
+4. **超算中心 SCNet** — 直连 `https://api.scnet.cn/api/llm/v1`（国家超算互联网），DeepSeek 系模型，当前提供 `DeepSeek-V4-Flash-0731-Event`（1M 上下文，思考档位 high/max）。走 OpenAI 兼容 chat completions 格式，切换器自动配置。
 
-A one-click tool that switches Codex Desktop's API route to third-party suppliers (OpenCode Go / DeepSeek official / Fox direct), rewrites `~/.codex/config.toml`, and launches Codex.
+A one-click tool that switches Codex Desktop's API route to third-party suppliers (OpenCode Go / DeepSeek official / Fox / SCNet direct), rewrites `~/.codex/config.toml`, and launches Codex.
 
 ## 特点 / Features
 
-- 不含任何 API Key：Key 只保存在你自己的 Windows 用户环境变量中（`OPENCODE_API_KEY` / `DEEPSEEK_API_KEY` / `FOX_API_KEY`），不会写进脚本或旁边的文件。
-- 不需要科学上网、不需要看门狗。OpenCode / DeepSeek 官方 / Fox 均大陆直连（Cloudflare 线路偶尔抖动，失败重试即可）；OpenCode 的 Pro 由内置本地小桥自动转换格式（只监听本机 `127.0.0.1`，无需手动操作）。
+- 不含任何 API Key：Key 只保存在你自己的 Windows 用户环境变量中（`OPENCODE_API_KEY` / `DEEPSEEK_API_KEY` / `FOX_API_KEY` / `SCNET_API_KEY`），不会写进脚本或旁边的文件。
+- 不需要科学上网、不需要看门狗。OpenCode / DeepSeek 官方 / Fox / 超算中心均大陆直连（Cloudflare 线路偶尔抖动，失败重试即可）；OpenCode 的 Pro 由内置本地小桥自动转换格式（只监听本机 `127.0.0.1`，无需手动操作）。
+- 中文不再报错：主脚本带 UTF-8 BOM（Windows PowerShell 5.1 在任何区域设置的电脑上都能正确解析中文菜单）；脚本自己发出的所有请求都按 UTF-8 字节发送，JSON 里的中文会被转义成 `\uXXXX` 纯 ASCII 报文，从传输层杜绝编码错乱。Chinese-safe: the script ships with a UTF-8 BOM and every request it sends is UTF-8 encoded with non-ASCII escaped to `\uXXXX`.
 - 自动完全退出旧 Codex/ChatGPT 进程，切换路由后重新启动，并自动验证新会话格式，避免新聊天报 automation_update 错误。
 - 选 DeepSeek 系列模型时自动设置 100 万（1M）上下文窗口，代码审核（Review）自动使用 `deepseek-v4-flash`。DeepSeek models get a 1M context window automatically; code review uses `deepseek-v4-flash`.
 - 思考强度不用手动选：切换器按模型自动设置可用档位，打开 Codex 后可在聊天窗口里调节（只显示该模型支持的档位）。No manual reasoning-effort question; the app offers only the levels each model supports.
@@ -54,7 +56,7 @@ No API keys are bundled. Keys live only in your Windows user environment variabl
 
 1. 不用手动关：脚本会自动完全退出 Codex/ChatGPT，切换路由后再重新启动（耐心等它跑完提示）。No need to quit manually - the script fully quits Codex/ChatGPT, switches the route, and restarts it.
 2. 双击 `Codex-RouteSwitcher-Friend.bat`。Double-click the `.bat` file.
-3. 输入 `1` 选 OpenCode Go（推荐 / 默认），`2` 选 DeepSeek 官方 API，`3` 选 Fox（可选）；输入 `4` 可测试连接，输入 `5` 可修复历史聊天供应商（只改供应商名字，聊天模型不变）。Enter `1` for OpenCode Go (recommended / default), `2` for DeepSeek official API, `3` for Fox (optional), `4` to test the connection, or `5` to repair old chat providers (name only, chat models kept).
+3. 输入 `1` 选 OpenCode Go（推荐 / 默认），`2` 选 DeepSeek 官方 API，`3` 选 Fox（可选），`4` 选超算中心 SCNet；输入 `5` 可测试连接，输入 `6` 可修复历史聊天供应商（只改供应商名字，聊天模型不变）。Enter `1` for OpenCode Go (recommended / default), `2` for DeepSeek official API, `3` for Fox (optional), `4` for SCNet; `5` to test the connection, or `6` to repair old chat providers (name only, chat models kept).
 4. 选择模型。切换后所有旧聊天也会自动变成你选的模型。Pick a model. After the switch, all old chats automatically use the model you picked.
 5. 第一次使用会提示输入你自己的 API Key（只保存到 Windows 用户环境变量）。On first run, enter your own API key (stored in Windows user environment variables only).
 6. 脚本改写 `config.toml` 并自动打开 Codex。The script rewrites the config and opens Codex.
@@ -65,9 +67,10 @@ No API keys are bundled. Keys live only in your Windows user environment variabl
 - OpenCode Go 直接连接 `https://opencode.ai/zen/go/v1`：不需要科学上网。选 `deepseek-v4-pro` 时自动走内置本地桥（`codex-opencode-pro-bridge.py`，监听 `127.0.0.1:9877`），请求会在本机被转换成 OpenCode 网关要求的格式，再转发到 `https://opencode.ai/zen/go`；切回其它模型时桥自动关闭。
 - DeepSeek 官方 API 直接连接 `https://api.deepseek.com`（Responses 格式，官方为 Codex 提供）。
 - Fox 直连 `https://dm-fox.rjj.cc/codex/v1`。
+- 超算中心 SCNet 直连 `https://api.scnet.cn/api/llm/v1`（OpenAI 兼容 chat completions 格式，切换器自动把 Codex 的 wire_api 配置为 chat）。
 - 配置是永久的：重启电脑、重开应用都有效。
 
-All three suppliers connect directly - no local proxy or VPN needed. The config is permanent and survives reboots.
+All four suppliers connect directly - no local proxy or VPN needed. The config is permanent and survives reboots.
 
 ## DeepSeek 官方 API 说明 / DeepSeek official API
 
@@ -79,11 +82,23 @@ All three suppliers connect directly - no local proxy or VPN needed. The config 
 
 Models: `deepseek-v4-flash` and `deepseek-v4-pro-0813` (the official stable build; the API id remains `deepseek-v4-pro` and the script maps it automatically). Both have a 1M context window and support `low/high/max` reasoning effort (default `high`). Review model is fixed to `deepseek-v4-flash`.
 
+## 超算中心 SCNet 说明 / SCNet (National Supercomputing)
+
+- 模型：当前提供 `DeepSeek-V4-Flash-0731-Event`（活动期模型）。**它可能间歇性请求不通**（额度用尽 / 活动调整等），切换器仍会保留这个选项；遇到报错时换其它供应商或稍后再试即可。
+- 接口格式：OpenAI 兼容的 chat completions（`https://api.scnet.cn/api/llm/v1`），与其它三个供应商的 Responses 格式不同，切换器会自动把 Codex 的 `wire_api` 配置为 `chat`，无需手动处理。
+- 上下文：100 万（1M）Token，脚本自动设置。
+- 思考强度：支持 `high / max`，默认 `high`；切换后可在 Codex 聊天窗口里调节。
+- 审核模型：自动使用所选模型本身（SCNet 上没有独立的 flash 审核模型）。
+- 中文：脚本自身请求全部按 UTF-8 发送、中文转义传输；若聊天中出现中文就报错，多为供应商网关问题，可用菜单 `5` 的测试连接验证（探测消息故意带中文）。
+
+Model offered: `DeepSeek-V4-Flash-0731-Event` (an event-period model that may be intermittently unavailable - the option stays available regardless). The endpoint speaks OpenAI-compatible chat completions; the switcher configures Codex's `wire_api = "chat"` automatically. 1M context, `high/max` reasoning effort (default `high`).
+
 ## API Key 从哪里来 / Where to get keys
 
 - OpenCode Go：在 <https://opencode.ai> 注册并创建 API Key（GitHub 账号登录）。
 - DeepSeek 官方：在 <https://platform.deepseek.com> 注册，在 API Keys 里创建 Key（以 `sk-` 开头）。
 - Fox：在 Fox 供应商平台注册并创建 API Key。
+- 超算中心 SCNet：在国家超算互联网平台（<https://www.scnet.cn>）注册，在控制台开通模型服务并创建 API Key。
 - 请勿共用别人的 Key，各用各的。Do not share keys.
 
 ## 邀请注册（可选，支持作者）/ Referral sign-up (optional)
@@ -101,7 +116,7 @@ Models: `deepseek-v4-flash` and `deepseek-v4-pro-0813` (the official stable buil
 - **报 `reconnecting 5/5`**：旧版本遗留问题（旧版需要本地代理），新版直连不受影响。*"reconnecting 5/5"*: leftover from the old proxy-based version, not an issue in this edition.
 - **旧聊天报 `tools... missing field name`**：旧会话用的是应用内置的旧供应商，新建聊天即可。*Old chats show this error*: create a new chat instead.
 - **Codex 没有自动启动**：手动打开 Codex 即可，配置已经写好。*Codex did not auto-start*: open it manually; the config is already set.
-- **旧聊天记录打不开 / 消失（之前用 Fox 等供应商）**：运行切换器输入 `5`，脚本会备份状态数据库，把数据库和所有旧会话的供应商改写成 CC（只改名字，聊天模型不变），然后完全退出重开 Codex 即可。*Old chats fail to open / disappear*: run the switcher and enter `5`; it backs up the state database and rewrites only the provider to CC (chat models are kept), then fully quit and reopen Codex.
+- **旧聊天记录打不开 / 消失（之前用 Fox 等供应商）**：运行切换器输入 `6`，脚本会备份状态数据库，把数据库和所有旧会话的供应商改写成 CC（只改名字，聊天模型不变），然后完全退出重开 Codex 即可。*Old chats fail to open / disappear*: run the switcher and enter `6`; it backs up the state database and rewrites only the provider to CC (chat models are kept), then fully quit and reopen Codex.
 - **旧聊天仍显示旧模型（如 luna）**：正常切换一次即可——每次切换时脚本都会自动把所有旧聊天同步成你选的模型，不用单独操作。*Old chats still show a stale model (e.g. luna)*: just run a normal switch; every switch automatically syncs all old chats to the model you picked.
 - **新聊天第一条消息报 `Invalid schema for function 'automation_update'`**：说明上次切换后旧进程没有完全退出。先完全退出 Codex（任务栏右键 -> 退出），再双击 bat 重新切换一次，然后开【新的】聊天窗口；或者先复用已经正常的旧聊天窗口。本版已改为自动完全退出进程，正常流程不会再遇到。*New chat shows this error*: fully quit Codex, rerun the switcher, then open a new chat (or reuse a healthy old chat).
 - **OpenCode 模型列表里为什么有 Pro 了？**：`deepseek-v4-pro` 经内置本地桥自动转换消息格式后已可在 OpenCode 上稳定使用（实测多轮会话、工具调用均通过）；选 Pro 时脚本会自动启动桥并把路由指向本地 `127.0.0.1:9877`，切回其它模型会自动关闭桥。GLM 系列、gpt-5.6-luna、kimi-k2.7+、mimo、minimax 仍因网关格式限制无法使用（列表里不会出现）。*OpenCode Pro now works via the built-in local bridge; the remaining gateway-incompatible models are filtered out.*
@@ -110,10 +125,12 @@ Models: `deepseek-v4-flash` and `deepseek-v4-pro-0813` (the official stable buil
 - **选了 Pro，本机没装 Python 怎么办？**：切换器会依次查找 `python`、`py` 和 Codex 运行时自带的 python，一般无需手动安装；若提示找不到 Python，装一个（勾选 Add to PATH）或换个网络环境重试。*Python requirement*: the switcher auto-finds python, including the one bundled with Codex's runtime.
 - **OpenCode Pro 直连报错怎么办？**：官方网关偶尔会回退旧的严格格式校验；若 Pro 直连出现 `missing field id` / `unknown variant tool` 类报错，可临时启用内置桥回退（手动运行 `python codex-opencode-pro-bridge.py` 并把 `[model_providers.CC]` 的 `base_url` 改为 `http://127.0.0.1:9877/v1`），或改用菜单 2 的 DeepSeek 官方 API。*If OpenCode Pro direct ever regresses to strict format errors, run the bundled bridge as a temporary fallback or use the official DeepSeek API.*
 - **提示找不到 Codex**：启动器会自动识别 Codex、ChatGPT、GPT(beta)；仍失败就手动打开，并把窗口里列出的候选应用名发给作者。*Codex not found*: the launcher detects Codex, ChatGPT and GPT(beta) automatically; if it still fails, open Codex manually.
+- **超算中心测试连接 / 聊天报错**：`DeepSeek-V4-Flash-0731-Event` 是活动期模型，可能间歇性不可用（额度、活动调整等），不是切换器的问题；换其它供应商或稍后再试。菜单 `5` 的测试连接可以随时复查。*"SCNet test/chat fails"*: the event-period model can be intermittently unavailable; switch suppliers or retry later.
+- **聊天里一出现中文就报错**：本版已做三层防护——主脚本带 UTF-8 BOM（任何 Windows 区域设置下中文菜单都正常）、脚本请求全部按 UTF-8 字节发送、JSON 中文转义为 `\uXXXX` 纯 ASCII 报文。若仍报错，用菜单 `5` 测试连接定位：探测消息故意带中文，能回「收到」就说明链路正常，问题在供应商网关。*"Chinese content errors"*: this edition ships UTF-8-BOM scripts and escapes non-ASCII in every request; use test option `5` to isolate where it breaks.
 
 ## 隐私说明 / Privacy
 
-脚本里没有任何 API Key。你的 Key 只保存在本机 Windows 用户环境变量中（`OPENCODE_API_KEY` / `DEEPSEEK_API_KEY` / `FOX_API_KEY`），改 Key 只需重新运行并回答 `n` 再输入一次。`switch.log` 只记录运行时间、供应商和所选模型，用于排查问题。
+脚本里没有任何 API Key。你的 Key 只保存在本机 Windows 用户环境变量中（`OPENCODE_API_KEY` / `DEEPSEEK_API_KEY` / `FOX_API_KEY` / `SCNET_API_KEY`），改 Key 只需重新运行并回答 `n` 再输入一次。`switch.log` 只记录运行时间、供应商和所选模型，用于排查问题。
 
 No API key is embedded. Keys are stored only in Windows user environment variables. `switch.log` only records timestamps, suppliers and selected models for troubleshooting.
 
