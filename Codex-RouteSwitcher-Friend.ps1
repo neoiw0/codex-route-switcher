@@ -21,10 +21,20 @@ $FoxBaseUrl = 'https://dm-fox.rjj.cc/codex/v1'
 # 超算中心（国家超算互联网 SCNet）：OpenAI 兼容 chat completions 接口，
 # wire_api 用 "chat"（其余供应商都是 "responses"）。接入方式参考本机 DSH 的
 # llm-pi-ai.providers.scnet-deepseek 配置；密钥环境变量为 SCNET_API_KEY。
-# 注意：DeepSeek-V4-Flash-0731-Event 是活动期模型，可能间歇性请求不通
-# （额度/活动结束等），仍保留在菜单里供选择，失败时换模型或稍后再试。
+# 模型列表黑名单制：运行时拉 /models 全量展示（2026-08 实测 38 个，
+# DeepSeek/Qwen/Kimi/GLM/MiniMax 全系），仅屏蔽 Base（无指令对齐）与
+# Embedding（向量模型）两类非对话用途型号。活动期型号 DeepSeek-V4-Flash-
+# 0731-Event 已从网关下线，内置回落列表使用实测存在的主流型号。
 $ScnetBaseUrl = 'https://api.scnet.cn/api/llm/v1'
-$ScnetModels = @('DeepSeek-V4-Flash-0731-Event')
+$ScnetModels = @(
+    'DeepSeek-V4-Flash', 'DeepSeek-V4-Flash-0731',
+    'DeepSeek-V4-Pro', 'DeepSeek-V4-Pro-0813',
+    'DeepSeek-R1-Distill-Llama-70B', 'DeepSeek-R1-Distill-Qwen-32B',
+    'Kimi-K2.5', 'Kimi-K2.6', 'Kimi-K2.7-Code', 'Kimi-K3',
+    'Qwen3.8-Max', 'Qwen3.7-Max', 'Qwen3.6-Max',
+    'GLM-5.3', 'GLM-5.2', 'MiniMax-M3', 'SCNet-Max', 'QwQ-32B'
+)
+$ScnetBlockedPatterns = @('*-base', '*embedding*')
 $OpenCodeProBridgeUrl = 'http://127.0.0.1:9877/v1'
 $OpenCodeProBridgePort = 9877
 $OpenCodeProBridgeScript = Join-Path $PSScriptRoot 'codex-opencode-pro-bridge.py'
@@ -328,6 +338,30 @@ namespace CodexSwitcher {
     catch {
         Write-Log "quickedit: unavailable - $($_.Exception.Message)"
     }
+}
+
+function Set-SkipLogin {
+    # 写入最小 auth.json（含占位 OPENAI_API_KEY），让 Codex 认为已经用
+    # API Key 方式登录过，从而跳过新版桌面版的强制登录屏。实际对话请求
+    # 仍然走 [model_providers.CC]（env_key 指定的环境变量密钥），这个占位
+    # key 不会用于任何请求。已有的 auth.json（真实官方登录）会先备份；
+    # 想恢复官方登录：删除 auth.json 后在 Codex 里重新登录即可。
+    $authPath = Join-Path $CodexHomePath 'auth.json'
+    if (Test-Path -LiteralPath $authPath) {
+        $backupName = 'auth.json.backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
+        Copy-Item -LiteralPath $authPath -Destination (Join-Path $CodexHomePath $backupName) -Force
+        Write-Log "skip-login: existing auth backed up: $backupName"
+        Write-Host "  Existing auth.json backed up as $backupName."
+    }
+    $json = '{ "OPENAI_API_KEY": "sk-codex-route-switcher-placeholder" }'
+    [System.IO.File]::WriteAllText($authPath, $json, [System.Text.UTF8Encoding]::new($false))
+    Write-Log "skip-login: auth written: $authPath"
+    Write-Host "  Offline auth written to $authPath."
+    # 顶层声明 API Key 登录偏好（老版本字段，新版本忽略，无害）
+    $text = [System.IO.File]::ReadAllText($ConfigPath)
+    $text = Set-TomlValue -Text $text -Section '' -Key 'preferred_auth_method' -Value (TomlString 'apikey')
+    [System.IO.File]::WriteAllText($ConfigPath, $text, [System.Text.UTF8Encoding]::new($false))
+    Write-Log 'skip-login: preferred_auth_method=apikey set in config.toml'
 }
 
 function Stop-CodexProcesses {
@@ -910,6 +944,47 @@ function Get-OpenCodeModels {
     return $OpenCodeModels
 }
 
+function Get-ScnetModels {
+    # 拉取超算中心 /models 全量列表（黑名单制：屏蔽 Base / Embedding），
+    # 失败回落内置 $ScnetModels。
+    try {
+        $key = [Environment]::GetEnvironmentVariable('SCNET_API_KEY', 'User')
+        if ([string]::IsNullOrEmpty($key)) {
+            Write-Host '  No saved key yet - using the built-in model list.'
+            return $ScnetModels
+        }
+        Write-Host '  Fetching the latest model list from api.scnet.cn (hard cap 10 s) ...'
+        $response = Invoke-HttpRequestFast -Uri ($ScnetBaseUrl.TrimEnd('/') + '/models') -Method Get `
+            -BearerKey $key -TimeoutSeconds 10
+        $list = @($response)
+        if ($null -ne $response.data) {
+            $list = @($response.data)
+        }
+        $models = @($list | ForEach-Object { [string]$_.id } |
+            Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
+            Sort-Object -Unique)
+        if ($models.Count -gt 0) {
+            $usable = @($models | Where-Object {
+                $id = $_.ToLowerInvariant()
+                -not (@($ScnetBlockedPatterns | Where-Object { $id -like $_ }).Count -gt 0)
+            } | Sort-Object -Unique)
+            if ($usable.Count -gt 0) {
+                Write-Log "scnet models fetched: $($models.Count), offered after blocklist: $($usable.Count)"
+                Write-Host "  Got $($models.Count) models from SCNet, offering $($usable.Count)."
+                return $usable
+            }
+        }
+        Write-Log 'scnet model fetch returned nothing usable - using built-in list'
+        Write-Host '  No usable model found - using the built-in list.'
+    }
+    catch {
+        Write-Log "scnet model fetch FAILED: $($_.Exception.Message) - using built-in list"
+        Write-Host "  Could not fetch the SCNet model list: $($_.Exception.Message)"
+        Write-Host '  Using the built-in list instead.'
+    }
+    return $ScnetModels
+}
+
 function Get-OrSetApiKey {
     param([string]$EnvironmentKey)
 
@@ -988,8 +1063,9 @@ function Test-SupplierConnection {
         # SCNet 是 OpenAI 兼容的 chat completions 接口，用聊天格式探测。
         # 探测消息故意带中文，验证中文链路；ConvertTo-Json 会把中文转义成
         # \uXXXX（纯 ASCII 报文），传输层不会出现编码错乱。
+        # 探测型号固定为 DeepSeek-V4-Flash（实测在线的主流型号）。
         $payload = @{
-            model      = $ScnetModels[0]
+            model      = 'DeepSeek-V4-Flash'
             messages   = @(@{ role = 'user'; content = '请只回复两个字：收到' })
             max_tokens = 64
         } | ConvertTo-Json -Depth 5
@@ -1391,6 +1467,7 @@ try {
     Write-Host '  4) 超算中心 SCNet（DeepSeek 活动模型 · 增量）'
     Write-Host '  5) 测试连接'
     Write-Host '  6) 修复历史聊天供应商 -> CC（只改名字）'
+    Write-Host '  7) 跳过登录（写离线登录凭据，解除新版强制登录）'
     $choice = Read-Host '请选择 (直接回车默认 1)'
     if ([string]::IsNullOrWhiteSpace($choice)) { $choice = '1' }
 
@@ -1412,6 +1489,22 @@ try {
             Write-Host ''
             Read-Host 'Press Enter to close'
             exit 0
+        }
+        '7' {
+            Write-Host ''
+            Write-Host 'This writes a minimal offline auth record so Codex skips the forced login screen.'
+            Write-Host 'Chat requests keep using your selected third-party route; the placeholder key is'
+            Write-Host 'never sent anywhere. An existing official login is backed up first.'
+            $answer = Read-Host 'Continue? (y = yes)'
+            if ($answer -notmatch '^[yY]') { throw 'Cancelled by user.' }
+            Write-Log 'skip-login requested'
+            if (-not (Stop-CodexProcesses)) {
+                throw 'Codex processes did not exit in time. Close them via Task Manager and run again.'
+            }
+            Set-SkipLogin
+            Write-Log 'skip-login done'
+            Start-CodexDirect
+            Verify-DynamicTools
         }
         '1' {
             Get-OrSetApiKey -EnvironmentKey 'OPENCODE_API_KEY'
@@ -1441,7 +1534,7 @@ try {
         '4' {
             Stop-OpenCodeProBridge
             Get-OrSetApiKey -EnvironmentKey 'SCNET_API_KEY'
-            $model = Select-FromList -Title '超算中心 SCNet 模型' -Items $ScnetModels
+            $model = Select-FromList -Title '超算中心 SCNet 模型' -Items (Get-ScnetModels)
             $supplier = 'scnet'
             $baseUrl = $ScnetBaseUrl
             $environmentKey = 'SCNET_API_KEY'
