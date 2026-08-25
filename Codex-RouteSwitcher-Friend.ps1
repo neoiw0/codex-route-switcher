@@ -42,17 +42,22 @@ $SwitcherCatalogMarker = 'route-switcher-deepseek-catalog.json'
 # web_search=disabled），这样它们才能正常对话。
 $SearchTolerantModels = @('deepseek-v4-flash', 'gpt-5.6-luna')
 
-# OpenCode Go 可用模型（已验证能被 Codex 使用，Responses 格式）。网关返回的
-# 其它模型会被过滤，避免选到后报错。实测（真实多轮会话载荷 + 桌面版端到端）：
-# flash / hy3 / kimi-k2.5 / kimi-k2.6 以及 deepseek-v4-pro 均可直连，Pro 的
-# 工具轮（含 shell 命令）也已确认可用（官方网关已修复）。GLM 系列 /
-# gpt-5.6-luna / kimi-k2.7+ / mimo / minimax 仍因网关格式限制无法使用（列表里
-# 不会出现）。codex-opencode-pro-bridge.py 保留作为可选回退，正常流程不使用。
+# OpenCode Go 模型列表采用"黑名单制"：网关返回的模型全部展示，只屏蔽
+# 实测与 Codex/网关不兼容的型号（通配符、小写比较），新模型（如
+# Ox Alpha Free / x-preview-f-free）上线后会自动出现在菜单里，无需改脚本。
 $OpenCodeModels = @(
     'deepseek-v4-flash',
     'deepseek-v4-pro',
     'hy3',
     'kimi-k2.5', 'kimi-k2.6'
+)
+$OpenCodeBlockedPatterns = @(
+    'glm*',          # GLM 系列：网关格式限制（实测报错）
+    'gpt-5.6-luna',  # 网关格式限制（实测报错）
+    'kimi-k2.7*',
+    'kimi-k2.8*',
+    'mimo*',         # 网关格式限制（实测报错）
+    'minimax*'       # 网关格式限制（实测报错）
 )
 
 # DeepSeek 官方 API 模型（菜单显示名 -> Codex 配置中的模型 ID）。
@@ -226,7 +231,7 @@ function Write-Log {
     param([string]$Message)
 
     try {
-        $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
+        $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Message
         Add-Content -LiteralPath $SwitchLogPath -Value $line -Encoding UTF8
     }
     catch {
@@ -278,6 +283,50 @@ function Invoke-HttpRequestFast {
     finally {
         $client.Dispose()
         $handler.Dispose()
+    }
+}
+
+function Disable-ConsoleQuickEdit {
+    # 关闭控制台"快速编辑"模式：鼠标在窗口里轻微拖动就会进入文本选择，
+    # 冻结整个控制台输出，看起来就像"按了回车没反应"，直到再按一次键才
+    # 恢复。这是此类卡顿反馈的高频真凶，且代码路径上无任何耗时操作。
+    try {
+        if (-not ('CodexSwitcher.ConsoleNative' -as [type])) {
+            Add-Type -TypeDefinition @'
+using System;
+using System.Runtime.InteropServices;
+namespace CodexSwitcher {
+    public static class ConsoleNative {
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern IntPtr GetStdHandle(int nStdHandle);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool GetConsoleMode(IntPtr hConsoleHandle, out int lpMode);
+        [DllImport("kernel32.dll", SetLastError = true)]
+        public static extern bool SetConsoleMode(IntPtr hConsoleHandle, int dwMode);
+    }
+}
+'@
+        }
+        $handle = [CodexSwitcher.ConsoleNative]::GetStdHandle(-10)
+        $mode = 0
+        if (-not [CodexSwitcher.ConsoleNative]::GetConsoleMode($handle, [ref]$mode)) {
+            Write-Log 'quickedit: GetConsoleMode failed - skipped'
+            return
+        }
+        if (($mode -band 0x40) -eq 0) {
+            Write-Log 'quickedit: already disabled'
+            return
+        }
+        $newMode = ($mode -band (-bnot 0x40)) -bor 0x80
+        if ([CodexSwitcher.ConsoleNative]::SetConsoleMode($handle, $newMode)) {
+            Write-Log 'quickedit: disabled'
+        }
+        else {
+            Write-Log 'quickedit: SetConsoleMode failed - skipped'
+        }
+    }
+    catch {
+        Write-Log "quickedit: unavailable - $($_.Exception.Message)"
     }
 }
 
@@ -729,12 +778,15 @@ function Get-FoxModels {
 function Select-FromList {
     param([string]$Title, [string[]]$Items)
 
+    Write-Log "list shown: $Title"
     Write-Host ''
     Write-Host $Title
     for ($index = 0; $index -lt $Items.Count; $index++) {
         Write-Host ('  {0}) {1}' -f ($index + 1), $Items[$index])
     }
+    $promptAt = [DateTime]::Now
     $choice = [int](Read-Host 'Select')
+    Write-Log ("list '{0}' choice={1} after {2:N1}s" -f $Title, $choice, (((Get-Date) - $promptAt).TotalSeconds))
     if ($choice -lt 1 -or $choice -gt $Items.Count) {
         throw 'Invalid selection.'
     }
@@ -833,14 +885,17 @@ function Get-OpenCodeModels {
             Where-Object { -not [string]::IsNullOrWhiteSpace($_) } |
             Sort-Object -Unique)
         if ($models.Count -gt 0) {
-            $usable = @($models | Where-Object { $_ -in $OpenCodeModels } | Sort-Object -Unique)
+            $usable = @($models | Where-Object {
+                $id = $_.ToLowerInvariant()
+                -not (@($OpenCodeBlockedPatterns | Where-Object { $id -like $_ }).Count -gt 0)
+            } | Sort-Object -Unique)
             if ($usable.Count -gt 0) {
-                Write-Log "models fetched from gateway: $($models.Count), Codex-usable: $($usable.Count)"
-                Write-Host "  Got $($models.Count) models from the gateway, $($usable.Count) usable with Codex."
+                Write-Log "models fetched from gateway: $($models.Count), offered after blocklist: $($usable.Count)"
+                Write-Host "  Got $($models.Count) models from the gateway, offering $($usable.Count) (known-incompatible ones hidden)."
                 return $usable
             }
-            Write-Log 'model fetch returned no Codex-usable models - using built-in list'
-            Write-Host '  No Codex-usable model found - using the built-in list.'
+            Write-Log 'model fetch returned no usable models after blocklist - using built-in list'
+            Write-Host '  No usable model found after filtering - using the built-in list.'
         }
         else {
             Write-Log 'model fetch returned no models - using built-in list'
@@ -862,7 +917,9 @@ function Get-OrSetApiKey {
     if (-not [string]::IsNullOrEmpty($existing)) {
         Write-Host ''
         Write-Host "A key for $EnvironmentKey is already saved on this PC."
+        $promptAt = [DateTime]::Now
         $answer = Read-Host 'Keep the saved key? (y = keep, n = enter a new key)'
+        Write-Log ("key prompt '{0}' answered '{1}' after {2:N1}s" -f $EnvironmentKey, $answer, (((Get-Date) - $promptAt).TotalSeconds))
         if ($answer -notmatch '^[nN]') {
             Write-Host "Using the saved $EnvironmentKey."
             return
@@ -1326,6 +1383,7 @@ function Start-CodexDirect {
 
 try {
     Write-Log 'switch start'
+    Disable-ConsoleQuickEdit
     Write-Host 'Codex 路由切换器（四合一版：OpenCode Go / DeepSeek 官方 / Fox / 超算中心）'
     Write-Host '  1) OpenCode Go（推荐 / 默认）'
     Write-Host '  2) DeepSeek 官方 API'
@@ -1400,10 +1458,12 @@ try {
                 $savedKey = [Environment]::GetEnvironmentVariable('SCNET_API_KEY', 'User')
                 $null = Invoke-HttpRequestFast -Uri ($ScnetBaseUrl.TrimEnd('/') + '/chat/completions') -Method Post `
                     -BearerKey $savedKey -JsonBody $probeBody -TimeoutSeconds 8
+                Write-Log 'scnet precheck: reachable'
                 Write-Host '  SCNet probe: reachable.'
             }
             catch {
                 $probeOk = $false
+                Write-Log ("scnet precheck FAILED: {0}" -f $_.Exception.Message)
                 Write-Host ''
                 Write-Host ("  WARNING: SCNet probe failed just now: {0}" -f $_.Exception.Message)
                 Write-Host '  This event-period model is often intermittently unavailable or slow.'

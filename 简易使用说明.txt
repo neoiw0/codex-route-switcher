@@ -31,7 +31,7 @@
 如果新开的聊天窗口第一条消息报 "tools...missing field name"（切到 Pro、GLM、Kimi 等模型时）：
 - 这是 OpenCode 网关不认搜索工具导致的，不是你弄错了；重新双击 bat、重新选一次你想要的模型（新版会自动处理好），然后开【新的】聊天窗口即可。
 
-OpenCode 里目前有 5 个模型能用：DeepSeek Flash、DeepSeek Pro、Hy3、Kimi K2.5、Kimi K2.6（菜单里只显示这些）。
+OpenCode 的模型列表会自动从网关拉全量（比如新上的 Ox Alpha Free 会自动出现），只屏蔽实测不兼容的少数型号：GLM、luna、kimi-k2.7 及以上、mimo、minimax。
 选 DeepSeek Pro 时，脚本会自动打开一个小工具（本地桥）把格式转换好，不用你手动管；切回其它模型时它会自动关闭。
 OpenCode 的 Pro 现在可以直接用了（官方已修复），工具、跑命令、多轮对话都正常；如果以后官方又变严格报错，再按 README 里的回退方法处理。
 也可以用 DeepSeek 官方 API 的 Pro：选第 2 项，需要先去 https://platform.deepseek.com 注册并创建 API Key（sk- 开头）。

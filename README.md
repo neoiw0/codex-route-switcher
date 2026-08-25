@@ -2,7 +2,7 @@
 
 一键把 Codex 桌面版的 API 路由切换到第三方供应商，自动改写 `%USERPROFILE%\.codex\config.toml`，随后启动 Codex。支持四种供应商：
 
-1. **OpenCode Go**（推荐 / 默认）— 直连 `https://opencode.ai/zen/go/v1`，DeepSeek / Kimi / GLM 等开源模型和 Luna，约 1.5 折。
+1. **OpenCode Go**（推荐 / 默认）— 直连 `https://opencode.ai/zen/go/v1`，DeepSeek / Kimi 等开源模型全量展示（仅屏蔽实测不兼容的少数型号），约 1.5 折。
 2. **DeepSeek 官方 API** — 直连 `https://api.deepseek.com`，`deepseek-v4-flash` 与 `deepseek-v4-pro-0813`（官方正式版，1M 上下文，思考档位 low/high/max）。
 3. **Fox**（可选）— 直连 `https://dm-fox.rjj.cc/codex/v1`，各类顶尖闭源模型，约 0.3 折。
 4. **超算中心 SCNet** — 直连 `https://api.scnet.cn/api/llm/v1`（国家超算互联网），DeepSeek 系模型，当前提供 `DeepSeek-V4-Flash-0731-Event`（1M 上下文，思考档位 high/max）。走 OpenAI 兼容 chat completions 格式，切换器自动配置。
@@ -128,6 +128,8 @@ Model offered: `DeepSeek-V4-Flash-0731-Event` (an event-period model that may be
 - **提示找不到 Codex**：启动器会自动识别 Codex、ChatGPT、GPT(beta)；仍失败就手动打开，并把窗口里列出的候选应用名发给作者。*Codex not found*: the launcher detects Codex, ChatGPT and GPT(beta) automatically; if it still fails, open Codex manually.
 - **超算中心测试连接 / 聊天报错、很慢、一直转圈**：`DeepSeek-V4-Flash-0731-Event` 是活动期模型，可能间歇性不可用或响应极慢（额度、活动调整等），不是切换器的问题；选它时切换器已自动做 8 秒预检并提醒，切过去之后可用菜单 `5` 测试连接复查，不行就重新双击 bat 选回 OpenCode Go / DeepSeek 官方。*"SCNet test/chat slow or unresponsive"*: the event-period model can be intermittently unavailable; the switcher pre-checks it, and menu `5` re-verifies anytime.
 - **聊天里一出现中文就报错**：本版已做三层防护——主脚本带 UTF-8 BOM（任何 Windows 区域设置下中文菜单都正常）、脚本请求全部按 UTF-8 字节发送、JSON 中文转义为 `\uXXXX` 纯 ASCII 报文。若仍报错，用菜单 `5` 测试连接定位：探测消息故意带中文，能回「收到」就说明链路正常，问题在供应商网关。*"Chinese content errors"*: this edition ships UTF-8-BOM scripts and escapes non-ASCII in every request; use test option `5` to isolate where it breaks.
+- **选完供应商 / 确认密钥后，下一行很久不出现**：多半是鼠标在窗口里轻微拖动触发了 Windows 控制台"快速编辑"文本选择，输出被整体冻结，再按一次回车或点一下窗口就恢复。新版启动时会自动关闭快速编辑模式；同时每个交互步骤都写进 `switch.log`（毫秒精度），再遇到就把日志发出来。*Next line takes ages after Enter*: usually a Quick Edit selection freeze; now auto-disabled, and every prompt is logged with millisecond timestamps.
+- **OpenCode 模型列表和网关不一致 / 新模型（如 Ox Alpha Free）没出现**：列表已改为黑名单制——网关返回的模型全部展示，只屏蔽实测不兼容的 GLM / luna / kimi-k2.7 及以上 / mimo / minimax 系列，新模型上线后会自动出现，无需更新脚本。*Model list*: full gateway list minus a small known-broken blocklist; new models appear automatically.
 
 ## 隐私说明 / Privacy
 

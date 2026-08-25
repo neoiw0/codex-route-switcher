@@ -14,7 +14,7 @@ function Write-Log {
     param([string]$Message)
 
     try {
-        $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss'), $Message
+        $line = '{0} {1}' -f (Get-Date -Format 'yyyy-MM-dd HH:mm:ss.fff'), $Message
         Add-Content -LiteralPath $SwitchLogPath -Value $line -Encoding UTF8
     }
     catch {
