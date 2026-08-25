@@ -84,7 +84,7 @@ Models: `deepseek-v4-flash` and `deepseek-v4-pro-0813` (the official stable buil
 
 ## 超算中心 SCNet 说明 / SCNet (National Supercomputing)
 
-- 模型：运行时自动拉取网关全量列表（2026-08 实测 38 个：DeepSeek / Qwen / Kimi / GLM / MiniMax 全系），仅屏蔽 Base（无指令对齐）与 Embedding（向量模型）两类非对话型号；新模型上线自动出现。之前的活动期型号 `DeepSeek-V4-Flash-0731-Event` 已从网关下线——如果你选它报错，请重新切换并改选 `DeepSeek-V4-Flash` 等在线型号。
+- 模型：运行时自动拉取网关全量列表（2026-08 实测 37 个：DeepSeek / Qwen / Kimi / GLM / MiniMax 全系），仅屏蔽 Base（无指令对齐）与 Embedding（向量模型）两类非对话型号，新模型上线自动出现。活动期型号 `DeepSeek-V4-Flash-0731-Event` 虽已不在网关 /models 列表里，但**实际仍可请求**（实测返回 429 限流而非 404），切换器会自动把它追加进菜单；选它报 429 就是限流，稍后再试即可。
 - 接口格式：OpenAI 兼容的 chat completions（`https://api.scnet.cn/api/llm/v1`），与其它三个供应商的 Responses 格式不同，切换器会自动把 Codex 的 `wire_api` 配置为 `chat`，无需手动处理。
 - 上下文与思考强度：DeepSeek V4 系列为 100 万（1M）Token；思考档位按 high/max 配置，默认 high，切换后可在 Codex 聊天窗口里调节。
 - 审核模型：自动使用所选模型本身（SCNet 上没有独立的 flash 审核模型）。
@@ -124,7 +124,7 @@ Model offered: `DeepSeek-V4-Flash-0731-Event` (an event-period model that may be
 - **选了 Pro，本机没装 Python 怎么办？**：切换器会依次查找 `python`、`py` 和 Codex 运行时自带的 python，一般无需手动安装；若提示找不到 Python，装一个（勾选 Add to PATH）或换个网络环境重试。*Python requirement*: the switcher auto-finds python, including the one bundled with Codex's runtime.
 - **OpenCode Pro 直连报错怎么办？**：官方网关偶尔会回退旧的严格格式校验；若 Pro 直连出现 `missing field id` / `unknown variant tool` 类报错，可临时启用内置桥回退（手动运行 `python codex-opencode-pro-bridge.py` 并把 `[model_providers.CC]` 的 `base_url` 改为 `http://127.0.0.1:9877/v1`），或改用菜单 2 的 DeepSeek 官方 API。*If OpenCode Pro direct ever regresses to strict format errors, run the bundled bridge as a temporary fallback or use the official DeepSeek API.*
 - **提示找不到 Codex**：启动器会自动识别 Codex、ChatGPT、GPT(beta)；仍失败就手动打开，并把窗口里列出的候选应用名发给作者。*Codex not found*: the launcher detects Codex, ChatGPT and GPT(beta) automatically; if it still fails, open Codex manually.
-- **超算中心测试连接 / 聊天报错、很慢、一直转圈**：活动期型号 `DeepSeek-V4-Flash-0731-Event` 已从 SCNet 网关下线（/models 里已无此型号）；请重新双击 bat 选超算中心，改选 `DeepSeek-V4-Flash` 等在线型号。选超算中心时切换器会先做 8 秒预检并提醒，菜单 `5` 可随时复查。*"SCNet test/chat slow or unresponsive"*: the event-period model was retired by the gateway; re-pick SCNet and choose an online model like `DeepSeek-V4-Flash`.
+- **超算中心测试连接 / 聊天报错、很慢、一直转圈**：活动期型号 `DeepSeek-V4-Flash-0731-Event` 不在网关 /models 列表里但实际可请求（切换器已自动加回菜单）；选它若报 `429` 即触发限流，等几分钟再试。其它报错用菜单 `5` 测试连接复查（探测固定走 `DeepSeek-V4-Flash`）。*"SCNet test/chat slow or unresponsive"*: the event model stays available via the switcher even though the gateway no longer lists it; HTTP 429 means rate-limited, retry later.
 - **Codex 打开就要求登录（新版强制登录）**：运行切换器输入 `7`——脚本会在 `%USERPROFILE%\.codex\auth.json` 写入一条离线登录凭据（含占位 API Key，仅用于解除登录屏，不会发给任何服务器；已有官方登录会先自动备份），随后重启 Codex 直接可用。想恢复官方账号登录：删除该 auth.json 再在 Codex 里登录即可。*Forced login screen*: run option `7`; it writes an offline auth record (placeholder key, never sent anywhere; existing logins are backed up first). Delete the file to go back to official login.
 - **聊天里一出现中文就报错**：本版已做三层防护——主脚本带 UTF-8 BOM（任何 Windows 区域设置下中文菜单都正常）、脚本请求全部按 UTF-8 字节发送、JSON 中文转义为 `\uXXXX` 纯 ASCII 报文。若仍报错，用菜单 `5` 测试连接定位：探测消息故意带中文，能回「收到」就说明链路正常，问题在供应商网关。*"Chinese content errors"*: this edition ships UTF-8-BOM scripts and escapes non-ASCII in every request; use test option `5` to isolate where it breaks.
 - **选完供应商 / 确认密钥后，下一行很久不出现**：多半是鼠标在窗口里轻微拖动触发了 Windows 控制台"快速编辑"文本选择，输出被整体冻结，再按一次回车或点一下窗口就恢复。新版启动时会自动关闭快速编辑模式；同时每个交互步骤都写进 `switch.log`（毫秒精度），再遇到就把日志发出来。*Next line takes ages after Enter*: usually a Quick Edit selection freeze; now auto-disabled, and every prompt is logged with millisecond timestamps.

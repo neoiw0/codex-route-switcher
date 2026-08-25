@@ -13,7 +13,7 @@
 - 输入 4 回车 = 用超算中心 SCNet（模型全量自动拉取 · 增量选项）。
 - 第一次用会让你输密钥（粘贴密钥：ctrl+v 不行的话就鼠标右键）。
 
-切到超算中心后聊天很慢、一直转圈没反应？之前的活动型号 DeepSeek-V4-Flash-0731-Event 已经被平台下线了；重新双击 bat 选 4，改选 DeepSeek-V4-Flash 等在线模型即可。菜单里现在能看到 SCNet 的全部对话模型（DeepSeek/Qwen/Kimi/GLM/MiniMax 全系）。
+超算中心的模型列表自动从网关拉全量（DeepSeek/Qwen/Kimi/GLM/MiniMax 全系）。活动型号 DeepSeek-V4-Flash-0731-Event 虽然不在平台列表里，但实际能用，切换器会自动把它加进菜单；选它报 429 就是限流，等几分钟再试。
 
 Codex 打开就要求登录才能用？双击 bat 输入 7（跳过登录）：会写一条离线登录凭据然后重启 Codex，直接就能用，不影响你选的第三方路由；想恢复官方登录就删掉 .codex 文件夹里的 auth.json 再登录。
 

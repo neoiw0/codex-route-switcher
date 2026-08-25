@@ -21,12 +21,12 @@ $FoxBaseUrl = 'https://dm-fox.rjj.cc/codex/v1'
 # 超算中心（国家超算互联网 SCNet）：OpenAI 兼容 chat completions 接口，
 # wire_api 用 "chat"（其余供应商都是 "responses"）。接入方式参考本机 DSH 的
 # llm-pi-ai.providers.scnet-deepseek 配置；密钥环境变量为 SCNET_API_KEY。
-# 模型列表黑名单制：运行时拉 /models 全量展示（2026-08 实测 38 个，
+# 模型列表黑名单制：运行时拉 /models 全量展示（2026-08 实测 37 个，
 # DeepSeek/Qwen/Kimi/GLM/MiniMax 全系），仅屏蔽 Base（无指令对齐）与
-# Embedding（向量模型）两类非对话用途型号。活动期型号 DeepSeek-V4-Flash-
-# 0731-Event 已从网关下线，内置回落列表使用实测存在的主流型号。
+# Embedding（向量模型）两类非对话用途型号。
 $ScnetBaseUrl = 'https://api.scnet.cn/api/llm/v1'
 $ScnetModels = @(
+    'DeepSeek-V4-Flash-0731-Event',
     'DeepSeek-V4-Flash', 'DeepSeek-V4-Flash-0731',
     'DeepSeek-V4-Pro', 'DeepSeek-V4-Pro-0813',
     'DeepSeek-R1-Distill-Llama-70B', 'DeepSeek-R1-Distill-Qwen-32B',
@@ -34,6 +34,10 @@ $ScnetModels = @(
     'Qwen3.8-Max', 'Qwen3.7-Max', 'Qwen3.6-Max',
     'GLM-5.3', 'GLM-5.2', 'MiniMax-M3', 'SCNet-Max', 'QwQ-32B'
 )
+# 不出现在网关 /models 列表里、但实际可以请求的型号（2026-08 实测：
+# DeepSeek-V4-Flash-0731-Event 返回 429 限流而非 404，说明网关仍受理），
+# 会自动追加到拉取到的列表末尾，不受黑名单影响。
+$ScnetExtraModels = @('DeepSeek-V4-Flash-0731-Event')
 $ScnetBlockedPatterns = @('*-base', '*embedding*')
 $OpenCodeProBridgeUrl = 'http://127.0.0.1:9877/v1'
 $OpenCodeProBridgePort = 9877
@@ -968,8 +972,10 @@ function Get-ScnetModels {
                 $id = $_.ToLowerInvariant()
                 -not (@($ScnetBlockedPatterns | Where-Object { $id -like $_ }).Count -gt 0)
             } | Sort-Object -Unique)
+            # 追加不在 /models 里但实际可请求的型号（如活动期 Event 型号）
+            $usable = @($usable + $ScnetExtraModels | Sort-Object -Unique)
             if ($usable.Count -gt 0) {
-                Write-Log "scnet models fetched: $($models.Count), offered after blocklist: $($usable.Count)"
+                Write-Log "scnet models fetched: $($models.Count), offered after blocklist+extras: $($usable.Count)"
                 Write-Host "  Got $($models.Count) models from SCNet, offering $($usable.Count)."
                 return $usable
             }
