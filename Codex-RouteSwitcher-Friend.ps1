@@ -233,6 +233,54 @@ function Write-Log {
     }
 }
 
+function Invoke-HttpRequestFast {
+    # Hard-capped direct HTTP request. Uses HttpClient with UseProxy=$false:
+    # system proxy auto-detection (WPAD) can stall for minutes and is NOT
+    # reliably bounded by Invoke-RestMethod's -TimeoutSec (switch.log once
+    # recorded an 11-minute model-list fetch). Returns parsed JSON; throws
+    # on failure or timeout.
+    param(
+        [Parameter(Mandatory = $true)][string]$Uri,
+        [ValidateSet('Get', 'Post')][string]$Method = 'Get',
+        [string]$BearerKey = '',
+        [string]$JsonBody = '',
+        [int]$TimeoutSeconds = 10
+    )
+
+    Add-Type -AssemblyName System.Net.Http -ErrorAction SilentlyContinue | Out-Null
+    $handler = [System.Net.Http.HttpClientHandler]::new()
+    $handler.UseProxy = $false
+    $client = [System.Net.Http.HttpClient]::new($handler)
+    $client.Timeout = [TimeSpan]::FromSeconds($TimeoutSeconds)
+    try {
+        if (-not [string]::IsNullOrEmpty($BearerKey)) {
+            $client.DefaultRequestHeaders.Authorization = `
+                [System.Net.Http.Headers.AuthenticationHeaderValue]::new('Bearer', $BearerKey)
+        }
+        try {
+            if ($Method -eq 'Post') {
+                $content = [System.Net.Http.StringContent]::new($JsonBody, [System.Text.Encoding]::UTF8, 'application/json')
+                $response = $client.PostAsync($Uri, $content).GetAwaiter().GetResult()
+            }
+            else {
+                $response = $client.GetAsync($Uri).GetAwaiter().GetResult()
+            }
+        }
+        catch [System.Threading.Tasks.TaskCanceledException] {
+            throw ("request timed out after {0} s" -f $TimeoutSeconds)
+        }
+        $body = $response.Content.ReadAsStringAsync().GetAwaiter().GetResult()
+        if (-not $response.IsSuccessStatusCode) {
+            throw ('HTTP {0}: {1}' -f [int]$response.StatusCode, $body)
+        }
+        return ($body | ConvertFrom-Json)
+    }
+    finally {
+        $client.Dispose()
+        $handler.Dispose()
+    }
+}
+
 function Stop-CodexProcesses {
     param([int]$MaxWaitSeconds = 30)
 
@@ -425,11 +473,13 @@ function Test-DynamicToolsNamespace {
 }
 
 function Verify-DynamicTools {
-    param([int]$WaitSeconds = 120)
+    param([int]$WaitSeconds = 60)
 
     $sessionRoot = Join-Path $env:USERPROFILE '.codex\sessions'
     $restartedAt = Get-Date
     Write-Log "verify: watching for a new session under $sessionRoot since $($restartedAt.ToString('yyyy-MM-dd HH:mm:ss'))"
+    Write-Host ''
+    Write-Host ("Verifying a fresh chat session (waits up to {0} s). Codex is already usable - you can close this window anytime." -f $WaitSeconds)
     $deadline = (Get-Date).AddSeconds($WaitSeconds)
     $sessionFile = $null
     while ((Get-Date) -lt $deadline) {
@@ -772,9 +822,9 @@ function Get-OpenCodeModels {
             Write-Host '  No saved key yet - using the built-in model list.'
             return $OpenCodeModels
         }
-        Write-Host '  Fetching the latest model list from opencode.ai ...'
-        $response = Invoke-RestMethod -Uri $OpenCodeModelsUrl -Method Get `
-            -Headers @{ Authorization = "Bearer $key" } -TimeoutSec 30
+        Write-Host '  Fetching the latest model list from opencode.ai (hard cap 10 s) ...'
+        $response = Invoke-HttpRequestFast -Uri $OpenCodeModelsUrl -Method Get `
+            -BearerKey $key -TimeoutSeconds 10
         $list = @($response)
         if ($null -ne $response.data) {
             $list = @($response.data)
@@ -846,7 +896,7 @@ function Test-SupplierConnection {
     Write-Host '  1) OpenCode Go'
     Write-Host '  2) DeepSeek 官方 API'
     Write-Host '  3) Fox'
-    Write-Host '  4) 超算中心（SCNet）'
+    Write-Host '  4) 超算中心（SCNet · 增量）'
     $target = Read-Host 'Test which supplier'
     switch ($target) {
         '1' {
@@ -1008,6 +1058,9 @@ function Update-Route {
     Write-Host "  context window: $contextWindow"
     Write-Host "  review model: $reviewModel"
     Write-Host "  web search tools: $(if ($searchTolerant) { 'on' } else { 'off (this route/model rejects the search tools)' })"
+    if ($isScnet) {
+        Write-Host '  提示：超算中心是增量选项；活动模型有时较慢或不可用，可用菜单 5 测试连接。'
+    }
 }
 
 function Update-SessionProvider {
@@ -1277,7 +1330,7 @@ try {
     Write-Host '  1) OpenCode Go（推荐 / 默认）'
     Write-Host '  2) DeepSeek 官方 API'
     Write-Host '  3) Fox（可选）'
-    Write-Host '  4) 超算中心 SCNet（DeepSeek）'
+    Write-Host '  4) 超算中心 SCNet（DeepSeek 活动模型 · 增量）'
     Write-Host '  5) 测试连接'
     Write-Host '  6) 修复历史聊天供应商 -> CC（只改名字）'
     $choice = Read-Host '请选择 (直接回车默认 1)'
@@ -1334,17 +1387,48 @@ try {
             $supplier = 'scnet'
             $baseUrl = $ScnetBaseUrl
             $environmentKey = 'SCNET_API_KEY'
+            # 增量供应商预检：活动模型经常间歇不可用，先花几秒探一下，
+            # 免得切过去之后聊天一直转圈没有反应。
+            Write-Host '  Probing SCNet quickly (max 8 s) ...'
+            $probeOk = $true
+            try {
+                $probeBody = @{
+                    model      = $model
+                    messages   = @(@{ role = 'user'; content = 'hi' })
+                    max_tokens = 8
+                } | ConvertTo-Json -Depth 5
+                $savedKey = [Environment]::GetEnvironmentVariable('SCNET_API_KEY', 'User')
+                $null = Invoke-HttpRequestFast -Uri ($ScnetBaseUrl.TrimEnd('/') + '/chat/completions') -Method Post `
+                    -BearerKey $savedKey -JsonBody $probeBody -TimeoutSeconds 8
+                Write-Host '  SCNet probe: reachable.'
+            }
+            catch {
+                $probeOk = $false
+                Write-Host ''
+                Write-Host ("  WARNING: SCNet probe failed just now: {0}" -f $_.Exception.Message)
+                Write-Host '  This event-period model is often intermittently unavailable or slow.'
+            }
+            if (-not $probeOk) {
+                $answer = Read-Host 'Continue switching to SCNet anyway? (y = yes, n = cancel and pick another supplier)'
+                if ($answer -notmatch '^[yY]') {
+                    throw 'SCNet cancelled - run the switcher again and choose another supplier.'
+                }
+            }
         }
         default { throw 'Invalid selection.' }
     }
 
     Write-Log "supplier=$supplier model=$model"
+    Write-Host ''
+    Write-Host 'Exiting Codex/ChatGPT processes ...'
     if (-not (Stop-CodexProcesses)) {
         throw 'Codex processes did not exit in time. Close them via Task Manager and run the switcher again.'
     }
     Update-Route -Model $model -Supplier $supplier -BaseUrl $baseUrl -EnvironmentKey $environmentKey
     Write-Log 'route updated'
+    Write-Host 'Syncing old chats to the selected model ...'
     Update-HistoryModels -TargetModel $model
+    Write-Host 'Launching Codex ...'
     Start-CodexDirect
     Verify-DynamicTools
 }

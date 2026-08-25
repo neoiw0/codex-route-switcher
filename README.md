@@ -84,7 +84,8 @@ Models: `deepseek-v4-flash` and `deepseek-v4-pro-0813` (the official stable buil
 
 ## 超算中心 SCNet 说明 / SCNet (National Supercomputing)
 
-- 模型：当前提供 `DeepSeek-V4-Flash-0731-Event`（活动期模型）。**它可能间歇性请求不通**（额度用尽 / 活动调整等），切换器仍会保留这个选项；遇到报错时换其它供应商或稍后再试即可。
+- 模型：当前提供 `DeepSeek-V4-Flash-0731-Event`（活动期模型）。**它可能间歇性请求不通、响应很慢或长时间无回复**（额度用尽 / 活动调整等），切换器仍会保留这个选项——它只是原三家之外的**增量选项**；遇到报错或转圈时换其它供应商或稍后再试即可。
+- 选中它时切换器会先做一次 8 秒快速预检：不通会给出 WARNING 并让你确认是否仍然继续，避免切过去之后才发现用不了。
 - 接口格式：OpenAI 兼容的 chat completions（`https://api.scnet.cn/api/llm/v1`），与其它三个供应商的 Responses 格式不同，切换器会自动把 Codex 的 `wire_api` 配置为 `chat`，无需手动处理。
 - 上下文：100 万（1M）Token，脚本自动设置。
 - 思考强度：支持 `high / max`，默认 `high`；切换后可在 Codex 聊天窗口里调节。
@@ -125,7 +126,7 @@ Model offered: `DeepSeek-V4-Flash-0731-Event` (an event-period model that may be
 - **选了 Pro，本机没装 Python 怎么办？**：切换器会依次查找 `python`、`py` 和 Codex 运行时自带的 python，一般无需手动安装；若提示找不到 Python，装一个（勾选 Add to PATH）或换个网络环境重试。*Python requirement*: the switcher auto-finds python, including the one bundled with Codex's runtime.
 - **OpenCode Pro 直连报错怎么办？**：官方网关偶尔会回退旧的严格格式校验；若 Pro 直连出现 `missing field id` / `unknown variant tool` 类报错，可临时启用内置桥回退（手动运行 `python codex-opencode-pro-bridge.py` 并把 `[model_providers.CC]` 的 `base_url` 改为 `http://127.0.0.1:9877/v1`），或改用菜单 2 的 DeepSeek 官方 API。*If OpenCode Pro direct ever regresses to strict format errors, run the bundled bridge as a temporary fallback or use the official DeepSeek API.*
 - **提示找不到 Codex**：启动器会自动识别 Codex、ChatGPT、GPT(beta)；仍失败就手动打开，并把窗口里列出的候选应用名发给作者。*Codex not found*: the launcher detects Codex, ChatGPT and GPT(beta) automatically; if it still fails, open Codex manually.
-- **超算中心测试连接 / 聊天报错**：`DeepSeek-V4-Flash-0731-Event` 是活动期模型，可能间歇性不可用（额度、活动调整等），不是切换器的问题；换其它供应商或稍后再试。菜单 `5` 的测试连接可以随时复查。*"SCNet test/chat fails"*: the event-period model can be intermittently unavailable; switch suppliers or retry later.
+- **超算中心测试连接 / 聊天报错、很慢、一直转圈**：`DeepSeek-V4-Flash-0731-Event` 是活动期模型，可能间歇性不可用或响应极慢（额度、活动调整等），不是切换器的问题；选它时切换器已自动做 8 秒预检并提醒，切过去之后可用菜单 `5` 测试连接复查，不行就重新双击 bat 选回 OpenCode Go / DeepSeek 官方。*"SCNet test/chat slow or unresponsive"*: the event-period model can be intermittently unavailable; the switcher pre-checks it, and menu `5` re-verifies anytime.
 - **聊天里一出现中文就报错**：本版已做三层防护——主脚本带 UTF-8 BOM（任何 Windows 区域设置下中文菜单都正常）、脚本请求全部按 UTF-8 字节发送、JSON 中文转义为 `\uXXXX` 纯 ASCII 报文。若仍报错，用菜单 `5` 测试连接定位：探测消息故意带中文，能回「收到」就说明链路正常，问题在供应商网关。*"Chinese content errors"*: this edition ships UTF-8-BOM scripts and escapes non-ASCII in every request; use test option `5` to isolate where it breaks.
 
 ## 隐私说明 / Privacy
