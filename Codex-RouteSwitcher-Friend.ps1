@@ -344,12 +344,63 @@ namespace CodexSwitcher {
     }
 }
 
-function Set-SkipLogin {
-    # 写入最小 auth.json（含占位 OPENAI_API_KEY），让 Codex 认为已经用
-    # API Key 方式登录过，从而跳过新版桌面版的强制登录屏。实际对话请求
-    # 仍然走 [model_providers.CC]（env_key 指定的环境变量密钥），这个占位
-    # key 不会用于任何请求。已有的 auth.json（真实官方登录）会先备份；
-    # 想恢复官方登录：删除 auth.json 后在 Codex 里重新登录即可。
+function Find-CodexCli {
+    # 扫描官方 CLI 安装目录（%LOCALAPPDATA%\OpenAI\Codex\bin 下每个哈希目录
+    # 对应一个版本），返回版本最高的 codex.exe；找不到返回 $null。
+    $binRoot = Join-Path $env:LOCALAPPDATA 'OpenAI\Codex\bin'
+    $best = $null
+    $bestVersion = $null
+    Get-ChildItem $binRoot -Directory -ErrorAction SilentlyContinue | ForEach-Object {
+        $exe = Join-Path $_.FullName 'codex.exe'
+        if (Test-Path -LiteralPath $exe) {
+            $version = $null
+            try {
+                $out = (& $exe --version 2>$null | Out-String).Trim()
+                if ($out -match 'codex-cli\s+([0-9]+(?:\.[0-9]+)*)') {
+                    $version = [version]$Matches[1]
+                }
+            }
+            catch {
+            }
+            if ($null -eq $version) {
+                $version = [version]'0.0'
+            }
+            if ($null -eq $bestVersion -or $version -gt $bestVersion) {
+                $bestVersion = $version
+                $best = $exe
+            }
+        }
+    }
+    return $best
+}
+
+function Test-ConfigWithCli {
+    # 让官方 CLI 实际加载一遍配置：新版移除的特性（如 wire_api="chat"）、
+    # 解析错误等都会在这里暴露。返回 @{ ok; detail }；找不到 CLI 时跳过
+    # （视为通过，老安装方式可能没有该目录）。
+    param([string]$CliPath)
+
+    if ([string]::IsNullOrEmpty($CliPath) -or -not (Test-Path -LiteralPath $CliPath)) {
+        return @{ ok = $true; detail = 'codex CLI not found - config validation skipped' }
+    }
+    $out = (& $CliPath login status 2>&1 | Out-String)
+    if ($out -match '(?i)(no longer supported|Error loading configuration|failed to load|invalid config|error parsing)') {
+        return @{ ok = $false; detail = $out.Trim() }
+    }
+    return @{ ok = $true; detail = $out.Trim() }
+}
+
+function Set-SkipLoginViaCli {
+    # 用官方 CLI 写入 API Key 登录态（auth_mode=apikey 的 auth.json 由官方
+    # 代码生成，格式与当前版本严格一致），跳过新版桌面版的强制登录屏。
+    # 占位 key 不会用于任何对话请求——实际请求仍走 [model_providers.CC]
+    # 的 env_key 环境变量密钥。恢复官方登录：`codex logout` 或删除
+    # auth.json 后重新登录即可。
+    param([string]$CliPath)
+
+    if ([string]::IsNullOrEmpty($CliPath) -or -not (Test-Path -LiteralPath $CliPath)) {
+        throw 'Official codex CLI not found under %LOCALAPPDATA%\OpenAI\Codex\bin - cannot write a version-correct auth record.'
+    }
     $authPath = Join-Path $CodexHomePath 'auth.json'
     if (Test-Path -LiteralPath $authPath) {
         $backupName = 'auth.json.backup-' + (Get-Date -Format 'yyyyMMdd-HHmmss')
@@ -357,15 +408,15 @@ function Set-SkipLogin {
         Write-Log "skip-login: existing auth backed up: $backupName"
         Write-Host "  Existing auth.json backed up as $backupName."
     }
-    $json = '{ "OPENAI_API_KEY": "sk-codex-route-switcher-placeholder" }'
-    [System.IO.File]::WriteAllText($authPath, $json, [System.Text.UTF8Encoding]::new($false))
-    Write-Log "skip-login: auth written: $authPath"
-    Write-Host "  Offline auth written to $authPath."
-    # 顶层声明 API Key 登录偏好（老版本字段，新版本忽略，无害）
-    $text = [System.IO.File]::ReadAllText($ConfigPath)
-    $text = Set-TomlValue -Text $text -Section '' -Key 'preferred_auth_method' -Value (TomlString 'apikey')
-    [System.IO.File]::WriteAllText($ConfigPath, $text, [System.Text.UTF8Encoding]::new($false))
-    Write-Log 'skip-login: preferred_auth_method=apikey set in config.toml'
+    Write-Log "skip-login: official CLI login --with-api-key ($CliPath)"
+    'sk-codex-route-switcher-placeholder' | & $CliPath login --with-api-key 2>&1 | ForEach-Object { Write-Host "  $_" }
+    $status = (& $CliPath login status 2>&1 | Out-String).Trim()
+    Write-Log ("skip-login: status after: {0}" -f (($status -split "`n")[0]))
+    if ($status -notmatch '(?i)logged in') {
+        Write-Host $status
+        throw 'CLI still reports not logged in - skip-login failed.'
+    }
+    Write-Host "  $status"
 }
 
 function Stop-CodexProcesses {
@@ -1200,6 +1251,7 @@ function Update-Route {
     if ($isScnet) {
         Write-Host '  提示：超算中心是增量选项；活动模型有时较慢或不可用，可用菜单 5 测试连接。'
     }
+    return $configBackup
 }
 
 function Update-SessionProvider {
@@ -1498,16 +1550,18 @@ try {
         }
         '7' {
             Write-Host ''
-            Write-Host 'This writes a minimal offline auth record so Codex skips the forced login screen.'
-            Write-Host 'Chat requests keep using your selected third-party route; the placeholder key is'
-            Write-Host 'never sent anywhere. An existing official login is backed up first.'
+            Write-Host 'This logs Codex in with a placeholder API key using the OFFICIAL CLI, so the'
+            Write-Host 'forced login screen is skipped. Chat requests keep using your selected third-'
+            Write-Host 'party route; the placeholder key is never sent anywhere. An existing official'
+            Write-Host 'login is backed up first.'
             $answer = Read-Host 'Continue? (y = yes)'
             if ($answer -notmatch '^[yY]') { throw 'Cancelled by user.' }
             Write-Log 'skip-login requested'
+            $cliPath = Find-CodexCli
             if (-not (Stop-CodexProcesses)) {
                 throw 'Codex processes did not exit in time. Close them via Task Manager and run again.'
             }
-            Set-SkipLogin
+            Set-SkipLoginViaCli -CliPath $cliPath
             Write-Log 'skip-login done'
             Start-CodexDirect
             Verify-DynamicTools
@@ -1539,6 +1593,10 @@ try {
         }
         '4' {
             Stop-OpenCodeProBridge
+            Write-Host ''
+            Write-Host '  NOTE: new Codex builds (26.818+) removed the chat protocol that SCNet speaks.'
+            Write-Host '  The switcher will try, auto-validate with the official CLI, and roll back if'
+            Write-Host '  rejected - your previous route stays intact. (A local bridge is in the works.)'
             Get-OrSetApiKey -EnvironmentKey 'SCNET_API_KEY'
             $model = Select-FromList -Title '超算中心 SCNet 模型' -Items (Get-ScnetModels)
             $supplier = 'scnet'
@@ -1583,8 +1641,24 @@ try {
     if (-not (Stop-CodexProcesses)) {
         throw 'Codex processes did not exit in time. Close them via Task Manager and run the switcher again.'
     }
-    Update-Route -Model $model -Supplier $supplier -BaseUrl $baseUrl -EnvironmentKey $environmentKey
+    $routeBackup = Update-Route -Model $model -Supplier $supplier -BaseUrl $baseUrl -EnvironmentKey $environmentKey
     Write-Log 'route updated'
+    # 新版 Codex 会拒绝不兼容配置（例如已移除的 wire_api="chat"，见官方
+    # discussion #7782——这正是"Windows setup didn't finish"卡死循环的根因）。
+    # 写入后立即用官方 CLI 校验；失败则回滚到本次切换前的备份并中止，
+    # 绝不让应用带着非法配置启动。
+    $cliCheck = Test-ConfigWithCli -CliPath (Find-CodexCli)
+    if (-not $cliCheck.ok) {
+        if (-not [string]::IsNullOrEmpty($routeBackup)) {
+            Copy-Item -LiteralPath $routeBackup -Destination $ConfigPath -Force
+            Write-Log "config check FAILED - rolled back to $routeBackup"
+        }
+        Write-Host ''
+        Write-Host '  ERROR: this Codex build rejected the written configuration:'
+        ($cliCheck.detail -split "`n") | Select-Object -First 4 | ForEach-Object { Write-Host "  $_" }
+        throw 'Config rejected by this Codex build - previous configuration restored. SCNet direct needs a local bridge on new builds; use OpenCode Go / DeepSeek official / Fox for now.'
+    }
+    Write-Log 'config check via CLI passed'
     Write-Host 'Syncing old chats to the selected model ...'
     Update-HistoryModels -TargetModel $model
     Write-Host 'Launching Codex ...'
